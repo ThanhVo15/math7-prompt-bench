@@ -1,0 +1,1 @@
+# System prompt template for JSON metrics estimation

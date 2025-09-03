@@ -1,1 +1,6 @@
+# Bỏ qua thư mục môi trường ảo
+venv/
 .env
+# Bỏ qua file cài đặt của Python
+__pycache__/
+*.pyc
