@@ -3,7 +3,7 @@ from typing import List, Dict
 from datetime import datetime, timezone
 
 from src.core.tokenizer import Tokenizer
-from src.models.schemas import PromptMetrics  # Import Pydantic model
+from src.models.schemas import PromptMetrics
 
 class BasicMetrics:
     """Tính toán MATTR và Reading Ease cho prompt"""

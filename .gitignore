@@ -1,5 +1,6 @@
 # Thêm dòng này vào file .gitignore
 .streamlit/secrets.toml
+.streamlit/math7-prompt-bench-31a4d9dcf574.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
