@@ -1,2 +1,7 @@
 streamlit
+openai==0.28  # Ghim phiên bản 0.28 để tương thích với cú pháp openai.ChatCompletion.create
+pandas
+gspread
+gspread-dataframe
+google-auth-oauthlib
 pydantic

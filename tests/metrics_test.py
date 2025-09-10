@@ -1,6 +1,6 @@
 def test_metrics_examples():
-    from src.services.tokenizer import AdvancedTokenizer
-    from src.services.metrics import BasicMetrics
+    from core.metrics.tokenizer import AdvancedTokenizer
+    from core.metrics.metrics import BasicMetrics
     
     tokenizer = AdvancedTokenizer()
     metrics = BasicMetrics()
