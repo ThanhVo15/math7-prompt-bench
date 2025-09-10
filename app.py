@@ -118,7 +118,7 @@ def apply_suggestion(level):
 
 
 # --- GIAO DIỆN NGƯỜI DÙNG (UI) ---
-st.title("🚀 GA Prompting Gamification Tool (MVP)")
+st.title("🚀 GA Prompting Gamification Tool")
 st.caption(f"Session ID: `{st.session_state.session_id}` | User ID: `{st.session_state.user_id}`")
 
 # Cột chính: Input và Output
