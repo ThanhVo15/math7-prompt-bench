@@ -1,7 +1,5 @@
 import streamlit as st
 import gspread
-import json
-import os
 from gspread_dataframe import set_with_dataframe
 import pandas as pd
 from typing import List
@@ -11,23 +9,12 @@ from pydantic import BaseModel
 class GoogleSheetManager:
     def __init__(self):
         self.client = self._connect()
-        # Lấy tên spreadsheet từ secrets.toml (phần này không có vấn đề)
         self.spreadsheet_name = st.secrets["google_sheets"]["spreadsheet_name"]
 
     def _connect(self):
         try:
-            # Đọc trực tiếp từ file JSON thay vì từ secrets.toml
-            json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
-                                    ".streamlit", "math7-prompt-bench-31a4d9dcf574.json")
-            
-            # Sử dụng service_account_from_dict hoặc service_account
-            if os.path.exists(json_path):
-                return gspread.service_account(filename=json_path)
-            else:
-                # Fallback: thử đọc từ secrets nếu không tìm thấy file
-                st.warning("Không tìm thấy file JSON, thử dùng credentials từ secrets.toml")
-                creds = st.secrets["gcp_service_account"]
-                return gspread.service_account_from_dict(creds)
+            creds = st.secrets["gcp_service_account"]
+            return gspread.service_account_from_dict(creds)
         except Exception as e:
             st.error(f"Lỗi kết nối Google Sheets: {e}")
             return None
