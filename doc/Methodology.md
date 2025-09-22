@@ -1,68 +1,97 @@
 ## **Methodology: The PromptOptima Experimental Framework**
 
-This section details the comprehensive methodology designed for the PromptOptima research initiative. It outlines the system architecture, the experimental workflow, the specific instruments for data collection, and the analytical plan for testing our core hypotheses and answering our research questions. The framework is designed to be a robust, replicable system for investigating the nuances of effective prompt engineering in an educational context.
+### **Abstract**
+This paper outlines the methodology for the PromptOptima Experimental Framework, a robust system designed to empirically investigate the relationship between prompt engineering and the quality of AI-generated educational content. The framework employs a mixed-methods research design, leveraging a custom-built interactive web application to collect both quantitative linguistic metrics and qualitative user interaction data. By systematically analyzing user-submitted prompts and the corresponding outputs from a Large Language Model (LLM), this research aims to identify the specific attributes of effective prompts in a 7th-grade mathematics context. The methodology incorporates a unique two-model system—a "Solver" LLM (`gpt-3.5-turbo-1106`) to generate solutions and a more advanced "Evaluator" LLM (`gpt-4o`) to score them against a pedagogical rubric—thereby mitigating self-assessment bias. The resulting data will be used to test hypotheses regarding prompt quality and structure, ultimately leading to evidence-based guidelines for educators using generative AI.
+
+---
 
 ### **1. Research Design & Workflow**
+This study employs a **mixed-methods research design**, combining quantitative analysis of prompt and solution metrics with qualitative thematic analysis of AI-generated rationales. The primary data collection instrument is the PromptOptima web application, which facilitates a structured, repeatable experimental workflow.
 
-This study employs a **mixed-methods research design**, combining quantitative analysis of user performance metrics with qualitative analysis of LLM-generated text. The primary instrument for data collection is the PromptOptima interactive web application, which facilitates a structured, multi-stage experimental workflow for each user interaction.
+The end-to-end workflow is designed as an iterative loop, enabling the collection of rich longitudinal data for each user session.
 
-The end-to-end workflow proceeds as follows:
 
-1.  **Problem Contextualization:** The user is presented with a 7th-grade math problem and first classifies it using three dropdown menus: `Content Domain`, `Cognitive Demand Level`, and `Problem Context`. This provides essential metadata for later analysis.
-2.  **Prompt Submission & Initial Analysis:** The user submits a prompt. The system backend immediately calculates a set of objective linguistic metrics for the prompt text.
-3.  **Combined LLM Execution:** The problem context and user prompt are sent in a single, structured API call to a "Solver" LLM (`gpt-3.5-turbo-1106`). The model is instructed to return a single JSON object containing both a step-by-step **solution** and its own **qualitative analysis** of the user's prompt.
-4.  **Asynchronous Solution Evaluation:** The generated solution, along with the original problem, is logged for a multi-faceted, asynchronous evaluation process. This includes manual correctness verification and automated analysis of explanation quality and consistency.
-5.  **Metric-Driven Feedback & Iteration:** The user is presented with the solution and a real-time dashboard comparing the objective metrics of their prompt with the LLM's estimations. When the user requests an "Improvement Suggestion," the system identifies a weak metric and provides a targeted, randomized prompt template to guide refinement. Each subsequent submission repeats this workflow, creating a rich, longitudinal dataset for each user session.
+
+**Workflow Stages:**
+
+1.  **Problem Contextualization:** A human researcher initiates a session by selecting a 7th-grade math problem and classifying it based on three controlled variables: `Content Domain`, `Cognitive Demand Level`, and `Problem Context`. This metadata provides a foundation for segmented analysis.
+2.  **Prompt Submission & Linguistic Analysis:** The researcher submits a prompt designed to solve the problem. The system's backend instantly calculates a vector of objective linguistic metrics (e.g., lexical diversity, readability) for the prompt.
+3.  **Two-Model LLM Execution:**
+    * **Solver Model (`gpt-3.5-turbo-1106`):** The prompt and problem are sent to the Solver, which generates a step-by-step solution and a qualitative analysis of the prompt itself.
+    * **Evaluator Model (`gpt-4o`):** The generated solution is passed to the Evaluator, which scores the explanation's quality against a detailed pedagogical rubric.
+4.  **Data Aggregation & Logging:** All data—contextual variables, linguistic metrics, the solution, the qualitative analysis, and the evaluation scores—are logged as a single, comprehensive record in a structured database.
+5.  **Feedback & Iteration Loop:** The researcher is presented with the solution and a real-time analysis. They can then choose to refine their prompt based on a system-generated suggestion, initiating the next iteration of the loop.
+
+---
 
 ### **2. Data Collection Instruments & Variables**
+A multi-faceted data collection strategy is employed to capture the key independent, dependent, and contextual variables.
 
-#### **2.1. Prompt Quality Metrics (Independent Variables)**
+#### **2.1. Independent Variables (Prompt Attributes)**
+These objective metrics quantify the linguistic characteristics of each user-generated prompt.
 
-These are objective, deterministic metrics calculated by our backend to quantify the linguistic quality of each user-generated prompt.
+* **Lexical Diversity (MATTR):** Measured using the Moving Average Type-Token Ratio.
+    * **Rationale:** MATTR is chosen over a simple Type-Token Ratio (TTR) as it is less sensitive to variations in prompt length, providing a more reliable measure of vocabulary richness.
+* **Textual Complexity (LIX-based Reading Ease):** Quantifies readability and cognitive load.
+    * **Rationale:** A LIX-based score is used for its effectiveness with shorter texts and its formulaic approach, which ensures deterministic and replicable scoring.
+* **Prompt Length (Token Count):** A direct measure of verbosity.
+    * **Rationale:** This variable is critical for testing the hypothesis that prompt effectiveness follows a non-linear relationship with length (i.e., more is not always better).
 
-* **MATTR (Moving Average Type-Token Ratio):** Measures the lexical diversity and richness of the vocabulary used in the prompt.
-* **Reading Ease (LIX-based):** Quantifies the textual complexity. A higher score indicates a prompt that is simpler and more accessible to read.
-* **Token Count:** A direct measure of the prompt's length, used to investigate the relationship between verbosity and effectiveness (H2).
+#### **2.2. Dependent Variables (Solution Quality)**
+The quality of the LLM's output is measured via a triangulated, three-part system to ensure reliability.
 
-#### **2.2. Solution Quality Metrics (Dependent Variables)**
-
-The quality of the LLM's generated solution is the primary dependent variable, measured using a comprehensive, three-part system.
-
-* **Metric 1: Answer Correctness (Manual Verification):** A binary score (1 for Correct, 0 for Incorrect) assigned by a human researcher. This manual approach is chosen to ensure accurate evaluation across all problem types, including conceptual questions where automated tests are not feasible.
-* **Metric 2: Explanation Quality (AI Judge Rubric):** A score out of 16 generated by a powerful "Evaluator" LLM (`gpt-4o`) acting as an expert teacher. It assesses the solution's explanation against a predefined rubric with four criteria: *Logical Soundness, Step Completeness, Calculation Accuracy,* and *Pedagogical Clarity*.
-* **Metric 3: Consistency Check:** A score from 0 to 1 measuring the model's reliability, determined by running the same prompt three times and comparing the final numerical answers.
+* **Metric 1: Answer Correctness (Manual Verification):** A binary score (1 = Correct, 0 = Incorrect) assigned by a human researcher.
+    * **Rationale:** Manual verification is essential for guaranteeing ground-truth accuracy, especially for conceptual problems where automated checks are unreliable.
+* **Metric 2: Explanation Quality (AI Judge Rubric):** A composite score (0-16) generated by the `gpt-4o` Evaluator model based on four equally weighted criteria:
+    1.  **Logical Soundness:** The coherence and correctness of the reasoning.
+    2.  **Step Completeness:** The inclusion of all necessary steps for comprehension.
+    3.  **Calculation Accuracy:** The correctness of all mathematical operations.
+    4.  **Pedagogical Clarity:** The suitability of the language and explanation for a 7th-grade student.
+    * **Rationale:** This AI-driven rubric allows for scalable and consistent evaluation of the solution's pedagogical value, capturing nuances beyond mere correctness.
+* **Metric 3: Solution Consistency:** An empirical score (0-1) measuring model reliability.
+    * **Rationale:** This is determined by executing the same prompt three times and comparing the final numerical answers, providing a direct measure of the prompt's ability to elicit a deterministic response.
 
 #### **2.3. Contextual and Behavioral Variables**
+* **Controlled Context:** `content_domain`, `cognitive_level`, `problem_context` (defined by the researcher).
+* **Prompt Classification:** A `prompt_label` (Level 0-3) manually assigned post-facto to categorize its structure.
+* **Qualitative Data:** The LLM's `analysis_rationale` text for thematic analysis.
+* **Longitudinal Data:** `user_id`, `session_id`, `timestamp`, and `suggestion_shown` to track user progression.
 
-* **User-Defined Context:** `content_domain`, `cognitive_level`, `problem_context`.
-* **Post-Facto Prompt Label:** A manually assigned label (`Level 0-3`) categorizing the structure of the user's prompt, essential for RQ1.
-* **LLM-Generated Rationale:** The `analysis_rationale` text from the LLM, providing qualitative insight for RQ2.
-* **User Progression Data:** `user_id`, `session_id`, `timestamp`, and `suggestion_shown` are logged to track user journeys and measure the impact of feedback for RQ3.
+---
 
 ### **3. Model Implementation & Rationale**
+A dual-model architecture is a cornerstone of this methodology, designed to ensure objective evaluation.
 
-* **Solver Model (`gpt-3.5-turbo-1106`):** This model serves as the primary subject of our study. Its widespread availability and support for structured JSON output make it an ideal baseline for generating findings relevant to a broad audience.
-* **Evaluator Model (`gpt-4o`):** GPT-4o is employed exclusively for the evaluation task in Metric 2. This is a critical methodological choice to mitigate bias. By using a separate, more advanced model for evaluation, we avoid "self-grading" and leverage GPT-4o's superior reasoning and instruction-following capabilities to ensure the scoring rubric is applied with the highest possible fidelity.
+* **Solver Model (`gpt-3.5-turbo-1106`):** This is the **subject model** under investigation. It was selected due to its widespread adoption and strong performance as a baseline, ensuring our findings are broadly applicable. Its support for structured JSON output is critical for reliable data extraction.
+* **Evaluator Model (`gpt-4o`):** This is the **adjudicator model**, used exclusively for scoring the Solver's output.
+    * **Rationale:** This is a critical control to mitigate **model self-assessment bias**. By using a separate, more advanced model for evaluation, we leverage GPT-4o's superior instruction-following and reasoning capabilities to apply the scoring rubric with the highest possible fidelity, analogous to having an expert teacher grade a student's work.
+
+---
 
 ### **4. Data Analysis Plan**
-
-The collected data will be analyzed to test our hypotheses and answer the research questions.
+The collected data will be analyzed using a combination of statistical and qualitative techniques.
 
 #### **4.1. The Composite Quality Score (CQS)**
-
-To create a single, unified measure of solution quality, the three solution metrics are normalized to a 0-1 scale and combined using a weighted formula. The weights prioritize correctness (50%), followed by explanation quality (35%), and consistency (15%). The final score is presented on a 10-point scale.
-`CQS = ((Score_Norm1 * 0.5) + (Score_Norm2 * 0.35) + (Score_Norm3 * 0.15)) * 10`
+To create a single, powerful dependent variable, the three solution metrics will be normalized and combined into a 10-point CQS.
+$CQS = ((Correctness_{Norm} \times 0.50) + (Explanation_{Norm} \times 0.35) + (Consistency_{Norm} \times 0.15)) \times 10$
+* **Rationale:** Correctness is weighted most heavily (50%) as it is a non-negotiable prerequisite for a quality solution. Explanation quality follows (35%), with consistency weighted as a final reliability factor (15%).
 
 #### **4.2. Hypothesis Testing**
+* **H1 (Prompt Quality → Solution Quality):** A **Pearson correlation analysis** will be conducted between a combined `Prompt_Quality_Score` (normalized MATTR and Reading Ease) and the `CQS`. A coefficient `r > 0.7` will be interpreted as a strong positive correlation.
+* **H2 (Optimal Structure):** A **scatter plot** of `Token_Count` vs. `CQS` will be created. We will fit a **quadratic regression model** to the data to formally test for the hypothesized inverted-U relationship, where performance peaks at a moderate prompt length.
 
-* **To Test H1 (Prompt Quality → Solution Quality):** We will perform a correlation analysis. A `Prompt_Quality_Score` will be calculated by combining the normalized MATTR and Reading Ease scores. We will then create a **scatter plot** of `Prompt_Quality_Score` (X-axis) vs. `CQS` (Y-axis) and compute the **Pearson correlation coefficient (r)**. A strong, positive `r` value will support this hypothesis.
+#### **4.3. Answering Research Questions**
+* **RQ1 (Efficacy of Structures):** Datasets will be segmented by context. An **Analysis of Variance (ANOVA)** will be performed to compare the mean `CQS` across different `prompt_label` groups (Level 0-3). Post-hoc tests (e.g., Tukey's HSD) will be used to identify which specific structures are most effective for different problem types. Results will be visualized with **bar charts**.
+* **RQ2 (LLM's Perspective):** A **qualitative thematic analysis** will be conducted on the `analysis_rationale` texts. A codebook will be developed to identify recurring themes (e.g., "request for step-by-step," "lack of constraints"), which will then be quantified. Findings will be presented using **frequency charts and word clouds**.
+* **RQ3 (Feedback Effectiveness):** A **longitudinal analysis** will track the evolution of user `Prompt_Quality_Score` across sessions. A **Paired Samples t-test** will be used to compare the scores of prompts immediately before and after a `suggestion_shown` event to determine if the feedback mechanism leads to a statistically significant improvement.
 
-* **To Test H2 (Optimal Structure):** We will create a **scatter plot** of `Token_Count` (X-axis) vs. `CQS` (Y-axis). If the hypothesis is correct, the plot will show that CQS does not increase indefinitely with token count, likely peaking and then plateauing or declining. This will be supplemented by comparing the average CQS for prompts with different post-facto `prompt_label` levels.
+---
 
-#### **4.3. Answering the Research Questions**
-
-* **To Answer RQ1 (Efficacy of Structures):** We will segment the entire dataset by the user-defined context variables (e.g., `content_domain`). Within each segment, we will group the runs by their post-facto `prompt_label` (Level 0-3) and calculate the average `CQS` for each group. The results will be presented in **bar charts** to visually compare the effectiveness of different structures for specific problem types.
-
-* **To Answer RQ2 (LLM's Perspective):** We will conduct a **qualitative thematic analysis** of the `analysis_rationale` text collected from all runs. We will identify recurring themes, categorize them, and calculate their frequency. The findings will be visualized using **word clouds** and **frequency charts** to reveal the factors the LLM consistently associates with high-quality prompts.
-
-* **To Answer RQ3 (Feedback Effectiveness):** We will perform a **longitudinal analysis** of user journeys. By grouping data by `user_id`, we will track the evolution of their `Prompt_Quality_Score` over time. We will specifically compare the scores of prompts created immediately before and after a `suggestion_shown` event. The aggregate percentage improvement will be calculated and visualized using **line charts** (for individual journeys) and **comparative bar charts** (for overall impact).
+### **5. Limitations and Ethical Considerations**
+* **Limitations:**
+    * **Generalizability:** Findings may be specific to the 7th-grade mathematics domain and the LLMs used (`gpt-3.5-turbo-1106`, `gpt-4o`).
+    * **Metric Validity:** The linguistic metrics (MATTR, LIX) are proxies for prompt quality and may not capture all nuances of an effective prompt.
+    * **Sample Bias:** The researchers submitting prompts may develop expertise over time, which may not be representative of a novice user.
+* **Ethical Considerations:**
+    * **Data Privacy:** All data collected will be anonymized. `user_id` and `session_id` are randomly generated strings with no link to personal identifiable information.
+    * **Informed Consent:** All participants in the study will be informed of the research goals and data collection procedures before beginning a session.

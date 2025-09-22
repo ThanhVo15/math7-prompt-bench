@@ -1,174 +1,191 @@
-# MATH 7 PROMPT BENCH
+# 🎓 PromptOptima: An Experimental Framework for Educational Prompt Engineering
 
-This project is an interactive Streamlit application designed to help users improve their prompt engineering skills for mathematical problems. It provides real-time feedback, a structured leveling system, and data logging to guide users toward creating more effective, diverse, and readable prompts.
+PromptOptima is an interactive web application built to research and discover the principles of effective prompt engineering in an educational context, with a specific focus on 7th-grade mathematics.
 
-## ✨ Core Features
+[](https://www.google.com/search?q=https://your-streamlit-app-url.com) ---
 
-  * **Interactive UI:** A dual-pane interface to write prompts and see AI-generated solutions instantly.
-  * **Real-time Metrics:** Automatic calculation of academic metrics for each prompt:
-      * **MATTR (Moving Average Type-Token Ratio):** Measures lexical diversity.
-      * **Reading Ease (LIX-based):** Measures the readability and complexity of the prompt.
-      * **Token Count:** Provides the token length of the prompt.
-  * **Gamified Improvement Loop:** A system that compares a user's current prompt against their initial "baseline" to visualize improvements in metrics.
-  * **Structured Prompt Taxonomy:** A leveling system (from Level 0 Zero-Shot to Level 3 advanced techniques) that suggests better prompt structures.
-  * **Serverless Data Logging:** All user interactions, prompts, AI responses, and calculated metrics are automatically logged to Google Sheets for later analysis.
-  * **API Mocking:** A built-in "mock mode" that generates fake AI responses, allowing for full testing of the application's UI and data pipeline without needing a valid OpenAI API key.
+## 📖 Table of Contents
 
------
-
-## ⚙️ How It Works: A Technical Overview
-
-This application follows a modern, stateful frontend architecture powered by Streamlit, with a serverless backend for data persistence.
-
-### Architecture
-
-The system is composed of three main layers:
-
-1.  **Frontend (UI & State Management):**
-
-      * Built entirely in **Streamlit**.
-      * Streamlit's `session_state` is used to manage the user's entire journey, including their current prompt, the baseline metrics for comparison, the latest AI solution, and their current prompt level. This ensures that each user has a unique, persistent experience during their session.
-
-2.  **Backend Services (Logic & Integration):**
-
-      * A collection of Python modules in the `src/` directory responsible for all core logic.
-      * **OpenAI Client (`services/openai_client.py`):** A dedicated module to handle all interactions with the GPT-3.5-Turbo API. It includes error handling and the API mocking logic.
-      * **Metrics Service (`core/metrics.py`):** Contains the business logic for calculating MATTR and Reading Ease based on the prompt text and a custom tokenizer.
-      * **Google Sheets Manager (`services/google_sheets.py`):** Acts as the data persistence layer. It authenticates using a GCP Service Account and writes structured data (using Pydantic models) to designated tabs in a Google Sheet.
-
-3.  **Database (Data Persistence):**
-
-      * **Google Sheets** is used as a simple, effective, and serverless database. This is ideal for a prototype/MVP as it requires no database setup or maintenance. Each table in the data model corresponds to a tab in the sheet.
-
-### The User Workflow & Gamification Loop
-
-The core of the application is the iterative improvement loop.
-
-1.  **Initialization:** A user starts a session. A sample problem is loaded, and a basic Level 0 ("Zero-Shot") prompt is generated.
-2.  **The Baseline Run:** The user submits their first prompt. This action triggers:
-      * A call to the OpenAI API.
-      * The calculation of metrics for this initial prompt.
-      * The creation of a `Run` and a `Metrics` record.
-      * This first set of metrics is saved in `st.session_state` as the **"Baseline"**.
-3.  **Feedback & Suggestion:** The UI displays the AI's solution and a metrics table comparing "Baseline" vs. "Current" (which are identical at this stage). The system then suggests an upgrade to the next prompt level (e.g., from Level 0 to Level 1).
-4.  **Iterative Improvement:** The user applies the suggested prompt structure, manually refines it, and submits again.
-5.  **The Comparison Run:** This new submission triggers the same process (API call, metrics calculation), but with a key difference:
-      * The new metrics are now displayed in the "Current" column.
-      * The UI calculates and displays the **delta** (e.g., +0.15 MATTR, +10.5 Reading Ease) between the Baseline and the Current prompt, providing instant, quantitative feedback on the improvement.
-6.  **Data Logging:** Every single run, suggestion event, and metric calculation is logged as a new row in Google Sheets, linked by unique IDs (`run_id`, `session_id`), allowing for rich data analysis later on.
-
-\!
-
-### Data Model
-
-The application uses Pydantic models (`models/schemas.py`) to ensure data is structured and validated before being sent to Google Sheets. The main tables are:
-
-  * **`Runs`:** Logs every prompt submission, including the prompt text, the full AI response, user/session info, and performance data like latency and token usage.
-  * **`Metrics`:** Stores the calculated MATTR, Reading Ease, and Token Count for each run, linked by `run_id`.
-  * **`Suggestions`:** Records every time a prompt suggestion is shown to a user and whether they accepted it.
+  - [About The Project](https://www.google.com/search?q=%23-about-the-project--research-problem)
+  - [Core Research Framework](https://www.google.com/search?q=%23-core-research-framework)
+      - [Key Hypotheses](https://www.google.com/search?q=%23key-hypotheses)
+      - [Research Questions](https://www.google.com/search?q=%23research-questions)
+  - [✨ Features](https://www.google.com/search?q=%23-features)
+  - [🛠️ Tech Stack](https://www.google.com/search?q=%23%EF%B8%8F-tech-stack)
+  - [🚀 Getting Started](https://www.google.com/search?q=%23-getting-started)
+      - [Prerequisites](https://www.google.com/search?q=%23prerequisites)
+      - [Installation](https://www.google.com/search?q=%23installation)
+  - [👨‍💻 Usage](https://www.google.com/search?q=%23-usage)
+  - [🔬 Methodology](https://www.google.com/search?q=%23-methodology)
+  - [🤝 Contributing](https://www.google.com/search?q=%23-contributing)
+  - [📝 License](https://www.google.com/search?q=%23-license)
 
 -----
 
-## 📂 Project Structure
+## 📌 About The Project & Research Problem
 
-```
-ga-prompting-mvp/
-├── .streamlit/
-│   └── secrets.toml         # Local secrets configuration
-├── src/
-│   ├── core/                # Core business logic (metrics, tokenizer)
-│   │   ├── metrics.py
-│   │   └── tokenizer.py
-│   ├── models/              # Pydantic data schemas
-│   │   └── schemas.py
-│   ├── services/            # External service integrations
-│   │   ├── google_sheets.py
-│   │   └── openai_client.py
-│   └── prompts/             # Prompt templates and taxonomy
-│       └── taxonomy.py
-├── app.py                     # Main Streamlit application file
-├── requirements.txt           # Python dependencies
-└── .gitignore                 # Git ignore file
-```
+Large Language Models (LLMs) have demonstrated significant potential in solving complex problems. However, the quality of their output is highly dependent on the quality of the input prompt. For non-expert users like educators and students, constructing an effective prompt that elicits a correct, clear, and pedagogically sound solution remains a major challenge.
+
+**PromptOptima** was created to address this gap. It is not a teaching tool but a dynamic research environment that allows us to observe how users discover and refine prompting techniques when provided with detailed analytical feedback. By collecting and analyzing thousands of user-model interactions, we aim to identify patterns of effective prompt structures and develop data-driven guidelines.
 
 -----
 
-## 🛠️ Setup and Local Development
+## 🧠 Core Research Framework
 
-Follow these steps to run the application on your local machine.
+Our research is guided by the following hypotheses and questions:
 
-### 1\. Prerequisites
+### Key Hypotheses
 
-  * Python 3.10+
-  * A Google Cloud Platform account
-  * An OpenAI API account
+  - **H1: The Prompt Quality-Performance Correlation Hypothesis**
 
-### 2\. Clone the Repository
+      - A prompt with higher linguistic quality (measured by lexical diversity via **MATTR** and readability via **LIX**) will correlate with a higher probability of the LLM generating a mathematically correct and pedagogically superior solution.
 
-```bash
-git clone <your-repository-url>
-cd ga-prompting-mvp
-```
+  - **H2: The Optimal Structure Hypothesis**
 
-### 3\. Set up Python Environment
+      - Prompt effectiveness is not a monotonic function of length. Well-structured prompts (e.g., using Chain-of-Thought principles, specifying an output format) will outperform longer, unstructured prompts.
 
-It is highly recommended to use a virtual environment.
+### Research Questions
 
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-pip install -r requirements.txt
-```
+  - **RQ1: Efficacy of Prompt Structures Across Contexts**
 
-### 4\. Configure Secrets
+      - How do different prompt structures affect LLM performance across various mathematical `Content Domains` and `Cognitive Demand Levels`?
 
-1.  **Create the secrets file:** Create a file at `.streamlit/secrets.toml`.
-2.  **Set up Google Credentials:**
-      * Go to the Google Cloud Console and create a new project.
-      * Enable the "Google Drive API" and "Google Sheets API".
-      * Create a "Service Account", grant it the "Editor" role, and download the JSON key file.
-3.  **Populate `secrets.toml`:** Open the downloaded JSON key and your local `secrets.toml` file. Copy the values into the TOML file as shown below. **Use triple single quotes (`'''`) for the `private_key`**.
-4.  **Add your OpenAI key.**
-5.  **Create a Google Sheet** and share it with the `client_email` from your service account, giving it "Editor" permissions.
+  - **RQ2: The LLM's Interpretive Framework**
 
-Your final `.streamlit/secrets.toml` file should look like this:
+      - What linguistic factors does the LLM itself identify as contributing to a prompt's effectiveness? How do these qualitative insights align with our quantitative metrics?
 
-```toml
-[openai]
-api_key = "sk-YOUR_OPENAI_API_KEY"
+  - **RQ3: The Impact of Metric-Driven Feedback**
 
-[gcp_service_account]
-type = "service_account"
-project_id = "your-gcp-project-id"
-private_key_id = "your-private-key-id"
-private_key = '''-----BEGIN PRIVATE KEY-----\n...YOUR_PRIVATE_KEY...\n-----END PRIVATE KEY-----\n'''
-client_email = "your-service-account-email@..."
-client_id = "your-client-id"
-# ... other fields from JSON ...
-
-[google_sheets]
-spreadsheet_name = "Your Google Sheet Name"
-```
-
-### 5\. Run the Application
-
-```bash
-streamlit run app.py
-```
-
-The application will be available at `http://localhost:8501`.
+      - To what extent does providing users with targeted, metric-driven feedback accelerate their ability to discover and adopt more effective prompt structures?
 
 -----
 
-## ☁️ Deployment
+## ✨ Features
 
-This application is designed for easy deployment on **Streamlit Community Cloud**.
+  - **Interactive Chat Interface:** An intuitive interface for users to input problems and experiment with different prompts.
+  - **Problem Classification:** Allows users to provide metadata for each problem (domain, cognitive level) to enable deeper, segmented analysis.
+  - **Real-time AI Feedback:**
+      - **Solver AI (`gpt-3.5-turbo`):** Solves the problem and provides a qualitative analysis of the user's prompt.
+      - **Judger AI (`gpt-4o`):** Assesses the pedagogical quality of the solution against a detailed rubric.
+  - **Empirical Consistency Check:** Automatically runs each prompt three times to measure the stability and reliability of the generated answer.
+  - **Intelligent Suggestion System:** Provides prompt templates and suggestions to help users improve their skills.
+  - **Automated Data Logging:** All interactions, metrics, and results are automatically logged to Google Sheets for analysis.
 
-1.  **Push to GitHub:** Ensure your project is pushed to a public GitHub repository. Your `.gitignore` file should prevent the `secrets.toml` file from being uploaded.
-2.  **Sign Up:** Sign up for [Streamlit Community Cloud](https://share.streamlit.io/) using your GitHub account.
-3.  **Deploy:**
-      * Click "New app" and select your repository.
-      * Ensure the "Main file path" is set to `app.py`.
-      * Click "Advanced settings..." and go to the "Secrets" section.
-      * **Copy the entire content** of your local `.streamlit/secrets.toml` file and paste it into the secrets text box.
-      * Click "Deploy\!". Your application will be live in a few minutes.
+-----
+
+## 🛠️ Tech Stack
+
+  - **Backend & Frontend:** Python, Streamlit
+  - **AI Models:** OpenAI (GPT-3.5-Turbo, GPT-4o)
+  - **Data Storage:** Google Sheets
+  - **Data Handling:** Pydantic, Pandas
+
+-----
+
+## 🚀 Getting Started
+
+To run this project on your local machine, follow the steps below.
+
+### Prerequisites
+
+  - Python 3.9+
+  - `pip` (Python package installer)
+
+### Installation
+
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/your-username/promptoptima.git
+    cd promptoptima
+    ```
+
+2.  **Install dependencies:**
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+3.  **Set up your secrets:**
+    Create a file at `.streamlit/secrets.toml` and add your credentials. This is a critical step for connecting to the OpenAI and Google Sheets APIs.
+
+    ```toml
+    # .streamlit/secrets.toml
+
+    # OpenAI API Key
+    [openai]
+    api_key = "sk-..."
+
+    # Google Sheets (GCP Service Account credentials)
+    [gcp_service_account]
+    type = "service_account"
+    project_id = "your-gcp-project-id"
+    private_key_id = "..."
+    private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+    client_email = "...@...iam.gserviceaccount.com"
+    client_id = "..."
+    auth_uri = "https://accounts.google.com/o/oauth2/auth"
+    token_uri = "https://oauth2.googleapis.com/token"
+    auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+    client_x509_cert_url = "..."
+
+    [google_sheets]
+    spreadsheet_name = "Your Google Sheet Name"
+    ```
+
+    **Note:** Make sure you have shared editor permissions for your Google Sheet with the `client_email` from your service account.
+
+4.  **Run the Streamlit app:**
+
+    ```bash
+    streamlit run app.py
+    ```
+
+    Open your browser and navigate to `http://localhost:8501`.
+
+-----
+
+## 👨‍💻 Usage
+
+1.  **Set up the Problem:** In the left sidebar, enter your Name/ID and classify the problem by `Content Domain`, `Cognitive Level`, and `Problem Context`. Click **Confirm Setup**.
+2.  **Enter the Problem:** In the main area, enter the text of the math problem you want to solve.
+3.  **Test Prompts:**
+      - Use the **Default Prompt** for a baseline result.
+      - Alternatively, enter your own **Custom Prompt** in the chat input and press Enter.
+4.  **Analyze the Results:**
+      - Review the solution generated by the AI.
+      - Check the **AI's Feedback** section for analysis of your prompt and the generated solution.
+5.  **Grade and Iterate:**
+      - Grade the response as **Correct** or **Incorrect** and click **Save Grade**.
+      - After grading, click the **Suggestion** button to receive a new prompt template and continue experimenting.
+
+-----
+
+## 🔬 Methodology
+
+This project employs a rigorous methodology to ensure the objectivity and reliability of its findings. A core component is the dual-model architecture:
+
+  - **Solver Model (`gpt-3.5-turbo`):** Acts as the subject of the study, generating solutions.
+  - **Evaluator Model (`gpt-4o`):** Acts as the expert adjudicator, scoring the Solver's output.
+
+This approach mitigates **self-assessment bias** and ensures that solution quality is graded as objectively as possible.
+
+For a complete overview of the research design, variables, and data analysis plan, please see the [**METHODOLOGY.md**](https://www.google.com/search?q=METHODOLOGY.md) document.
+
+-----
+
+## 🤝 Contributing
+
+Contributions are welcome to improve the project. Please fork the repository, create a new branch for your feature, and open a Pull Request.
+
+1.  Fork the Project
+2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the Branch (`git push origin feature/AmazingFeature`)
+5.  Open a Pull Request
+
+-----
+
+## 📝 License
+
+This project is licensed under the MIT License. See the `LICENSE` file for more details.

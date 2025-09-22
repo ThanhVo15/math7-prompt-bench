@@ -46,12 +46,15 @@ class Suggestion(BaseModel):
     session_id: str
     user_id: str
     run_id: str
-    suggested_level: int
+    
+    suggestion_key: int          # Key của prompt trong PROMPT_TAXONOMY, ví dụ: 0, 1, 2...
+    suggestion_name: str         # Tên của prompt, ví dụ: "Zero-Shot Prompting"
+    suggested_level: int         # Level của prompt, ví dụ: 0, 1, 2, 3
+    # -----------------------
+
     shown_at: datetime = Field(default_factory=new_timestamp)
     accepted: bool = False
     accepted_at: Optional[datetime] = None
-
-# Mở file src/models/schemas.py và cập nhật class Evaluation
 
 class Evaluation(BaseModel):
     evaluation_id: str = Field(default_factory=new_uuid)
