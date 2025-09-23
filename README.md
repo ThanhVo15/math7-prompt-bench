@@ -6,19 +6,19 @@ PromptOptima is an interactive web application built to research and discover th
 
 ## 📖 Table of Contents
 
-  - [About The Project](https://www.google.com/search?q=%23-about-the-project--research-problem)
-  - [Core Research Framework](https://www.google.com/search?q=%23-core-research-framework)
-      - [Key Hypotheses](https://www.google.com/search?q=%23key-hypotheses)
-      - [Research Questions](https://www.google.com/search?q=%23research-questions)
-  - [✨ Features](https://www.google.com/search?q=%23-features)
-  - [🛠️ Tech Stack](https://www.google.com/search?q=%23%EF%B8%8F-tech-stack)
-  - [🚀 Getting Started](https://www.google.com/search?q=%23-getting-started)
-      - [Prerequisites](https://www.google.com/search?q=%23prerequisites)
-      - [Installation](https://www.google.com/search?q=%23installation)
-  - [👨‍💻 Usage](https://www.google.com/search?q=%23-usage)
-  - [🔬 Methodology](https://www.google.com/search?q=%23-methodology)
-  - [🤝 Contributing](https://www.google.com/search?q=%23-contributing)
-  - [📝 License](https://www.google.com/search?q=%23-license)
+  - [About The Project]
+  - [Core Research Framework]
+      - [Key Hypotheses]
+      - [Research Questions]
+  - [✨ Features]
+  - [🛠️ Tech Stack]
+  - [🚀 Getting Started]
+      - [Prerequisites]
+      - [Installation]
+  - [👨‍💻 Usage]
+  - [🔬 Methodology]
+  - [🤝 Contributing]
+  - [📝 License]
 
 -----
 
