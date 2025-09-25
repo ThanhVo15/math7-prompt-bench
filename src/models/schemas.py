@@ -1,9 +1,10 @@
+# src/models/schemas.py
+
 import uuid
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from typing import Optional
 
-# Hàm factory để tự động tạo UUID và thời gian
 def new_uuid():
     return str(uuid.uuid4())
 
@@ -21,11 +22,20 @@ class Run(BaseModel):
     prompt_text: str
     prompt_level: int
     model_name: str
-    response_text: str
-    estimated_mattr: Optional[float] = None
+    response_text: str # Lời giải từ Solver
+    
+    # --- CÁC TRƯỜNG MỚI TỪ ANALYZER ---
+    clarity_score: Optional[int] = None
+    specificity_score: Optional[int] = None
+    structure_score: Optional[int] = None
+    
+    estimated_token_count: Optional[int] = None
+    estimated_mattr_score: Optional[float] = None
     estimated_reading_ease: Optional[float] = None
-    analysis_rationale: Optional[str] = None # nhận xét về PROMPT
-    solution_evaluation: Optional[str] = None # nhận xét về SOLUTION
+    
+    analysis_rationale: Optional[str] = None # Nhận xét tổng thể từ Analyzer
+    # -----------------------------------
+    
     latency_ms: int
     tokens_in: int
     tokens_out: int
@@ -46,12 +56,9 @@ class Suggestion(BaseModel):
     session_id: str
     user_id: str
     run_id: str
-    
-    suggestion_key: int          # Key của prompt trong PROMPT_TAXONOMY, ví dụ: 0, 1, 2...
-    suggestion_name: str         # Tên của prompt, ví dụ: "Zero-Shot Prompting"
-    suggested_level: int         # Level của prompt, ví dụ: 0, 1, 2, 3
-    # -----------------------
-
+    suggestion_key: int
+    suggestion_name: str
+    suggested_level: int
     shown_at: datetime = Field(default_factory=new_timestamp)
     accepted: bool = False
     accepted_at: Optional[datetime] = None
@@ -60,20 +67,9 @@ class Evaluation(BaseModel):
     evaluation_id: str = Field(default_factory=new_uuid)
     run_id: str
     grader_id: str
-    evaluator_model_name: str
     
-    # --- Điểm thủ công ---
-    correctness_score: int
-    
-    # --- Các điểm do AI tính toán ---
-    explanation_score: Optional[float] = None # Đây là tổng điểm
-    consistency_score: Optional[float] = None
-    
-    # --- 4 điểm thành phần chi tiết ---
-    logical_soundness_score: Optional[int] = None
-    step_completeness_score: Optional[int] = None
-    calculation_accuracy_score: Optional[int] = None
-    pedagogical_clarity_score: Optional[int] = None
-    
+    # Chỉ còn điểm thủ công
+    correctness_score: int # 1 for Correct, 0 for Incorrect
     evaluation_notes: Optional[str] = None
+    
     evaluated_at: datetime = Field(default_factory=new_timestamp)
