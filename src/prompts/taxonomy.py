@@ -1,12 +1,4 @@
 PROMPT_TAXONOMY = {
-    0: {
-        "level": 0,
-        "name": "Zero-Shot Prompting",
-        "category": "Zero-Shot",
-        "description": "A direct question without any context or examples.",
-        "template": "Solve this problems",
-        "example": "A rectangle has a length of 15 cm and a width of 8 cm. What is its area?"
-    },
     1: {
         "level": 1,
         "name": "Instructional Prompting",
@@ -106,7 +98,7 @@ PROMPT_TAXONOMY = {
         "example": (
             "Analyze and brainstorm multiple solutions to the problem: A rectangle has a length of 15 cm and a width of 8 cm. What is its area?. "
             "Then, evaluate those solutions, choose the best one, and implement it."
-        )
+        )   
     },
     7: {
         "level": 3,

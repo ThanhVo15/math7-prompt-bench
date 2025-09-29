@@ -48,6 +48,11 @@ USER PROMPT:
 ${user_prompt}
 >>>
 
+USER PROBLEMS:
+<<<
+${problem_text}
+>>>            
+                                                      
 EVALUATION GOAL
 Score how effectively the prompt communicates intent and constraints so that an LLM can produce a high-quality answer.
 
