@@ -65,7 +65,51 @@ class GoogleSheetManager:
             st.toast(f"Đã lưu vào sheet '{sheet_name}'!", icon="✅")
         except Exception as e:
             st.error(f"Lỗi khi ghi dữ liệu vào sheet '{sheet_name}': {e}")
+            
+    def get_df(self, sheet_name: str) -> pd.DataFrame:
+        """
+        Đọc toàn bộ tab Google Sheets thành DataFrame.
+        - Dòng đầu là header.
+        - Tự xử lý hàng thiếu cột (pad/truncate).
+        - Loại hàng trống hoàn toàn.
+        """
+        ws = self._get_worksheet(sheet_name)
+        if not ws:
+            return pd.DataFrame()
+
+        try:
+            # Lấy tất cả ô (list[list])
+            data = ws.get_all_values()
+            if not data or not data[0]:
+                return pd.DataFrame()
+
+            header = [str(h).strip() for h in data[0]]
+            rows = data[1:]
+
+            # Chuẩn hoá số cột mỗi hàng khớp header
+            ncol = len(header)
+            norm_rows = []
+            for r in rows:
+                r = list(r)
+                if len(r) < ncol:
+                    r += [""] * (ncol - len(r))
+                elif len(r) > ncol:
+                    r = r[:ncol]
+                norm_rows.append([str(x) if x is not None else "" for x in r])
+
+            df = pd.DataFrame(norm_rows, columns=header)
+
+            # Bỏ các hàng trống hoàn toàn
+            df = df[~df.apply(lambda s: all(str(x).strip() == "" for x in s), axis=1)]
+            return df
+
+        except Exception as e:
+            st.error(f"Lỗi khi đọc sheet '{sheet_name}': {e}")
+            return pd.DataFrame()
+
 
 @st.cache_resource
-def get_gsheet_manager():
+def get_gsheet_manager(_version: int = 2):
     return GoogleSheetManager()
+
+
