@@ -42,46 +42,56 @@ class GoogleSheetManager:
             st.error(f"Lỗi khi mở worksheet '{sheet_name}': {e}")
             return None
 
-    def append_data(self, sheet_name: str, records: list): # Allow generic list
+    def append_data(self, sheet_name: str, records: list):
             worksheet = self._get_worksheet(sheet_name)
             if not worksheet or not records:
                 return
 
-            # Prepare data by converting models to dicts, but pass existing dicts through.
+            # ===================================================================
+            # === NÂNG CẤP: Logic thông minh để xử lý cả object và dictionary ===
+            # ===================================================================
             data_to_append = []
             for record in records:
                 if isinstance(record, dict):
+                    # Nếu đã là dictionary, dùng luôn
                     data_to_append.append(record)
-                elif hasattr(record, 'dict'):  # Handles Pydantic v1 models
-                    data_to_append.append(record.dict())
-                elif hasattr(record, 'model_dump'): # Handles Pydantic v2 models
+                elif hasattr(record, 'model_dump'): # Dành cho Pydantic v2
                     data_to_append.append(record.model_dump())
+                elif hasattr(record, 'dict'): # Dành cho Pydantic v1
+                    data_to_append.append(record.dict())
                 else:
-                    # Fallback for other object types, like dataclasses
+                    # Fallback cho các loại khác như dataclass
                     from dataclasses import asdict, is_dataclass
                     if is_dataclass(record):
                         data_to_append.append(asdict(record))
                     else:
-                        data_to_append.append(record) # Append as is if unknown
-
+                        # Nếu không nhận dạng được, cứ thử append
+                        data_to_append.append(record)
+            
+            # Nếu data_to_append vẫn rỗng, thoát sớm
+            if not data_to_append:
+                return
+                
             df_to_append = pd.DataFrame(data_to_append)
 
-            # Chuẩn hóa datetime UTC -> string (logic remains the same)
+            # Chuẩn hóa datetime UTC -> string
             for col in df_to_append.select_dtypes(include=["datetime64[ns, UTC]"]).columns:
                 df_to_append[col] = df_to_append[col].dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
             try:
-                existing_data = worksheet.get_all_records()
-                if not existing_data:
+                # Kiểm tra xem sheet có header chưa
+                header = worksheet.row_values(1)
+                if not header:
+                    # Nếu chưa có, ghi cả header và dữ liệu
                     set_with_dataframe(worksheet, df_to_append, include_index=False, resize=True)
                 else:
-                    # Ensure columns match before appending
-                    existing_headers = worksheet.row_values(1)
-                    df_to_append = df_to_append.reindex(columns=existing_headers).fillna('')
+                    # Nếu có rồi, chỉ nối thêm dòng
+                    # Sắp xếp lại cột của dataframe cho khớp với header của sheet
+                    df_aligned = df_to_append.reindex(columns=header).fillna('')
                     worksheet.append_rows(
-                        df_to_append.values.tolist(), value_input_option="USER_ENTERED"
+                        df_aligned.values.tolist(), value_input_option="USER_ENTERED"
                     )
-                st.toast(f"Đã lưu vào sheet '{sheet_name}'!", icon="✅")
+                # st.toast(f"Đã lưu vào sheet '{sheet_name}'!", icon="✅") # Có thể bỏ comment dòng này nếu muốn thấy toast
             except Exception as e:
                 st.error(f"Lỗi khi ghi dữ liệu vào sheet '{sheet_name}': {e}")
 
