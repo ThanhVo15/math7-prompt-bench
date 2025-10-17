@@ -1,5 +1,5 @@
 import os, time, json, random
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from string import Template
 import re 
 
@@ -268,17 +268,16 @@ def get_solution_from_solver(user_prompt: str, problem_text: str, model="gpt-3.5
 def synthesize_prompt_from_suggestion(
     problem_text: str,
     suggestion: Dict[str, Any],
-    cognitive_level: int,  # <<< THAY ĐỔI 1: Thêm tham số cognitive_level
+    cognitive_level: int,
+    ai_persona: str,  # <<< ĐÂY LÀ THAM SỐ BẮT BUỘC
     *,
     model: str = "gpt-3.5-turbo",
-    ai_persona: Optional[str] = None, # Giữ lại để có thể ghi đè nếu cần
     strict_fill: bool = False,
-) -> str:
+) -> Tuple[str, str]: # <<< NÓ TRẢ VỀ MỘT TUPLE (chuỗi, chuỗi)
     tpl = suggestion.get("template", "{problem_text}")
 
     client, _ = _client()
     if not client or strict_fill:
-        # Fallback thông minh hơn
         filled_tpl = tpl.replace("{problem_text}", problem_text)
         if "{student_answer}" in filled_tpl:
             plausible_wrong_answer = "The student calculated the area as 96 square meters."
@@ -286,89 +285,45 @@ def synthesize_prompt_from_suggestion(
         if "{hypothesis}" in filled_tpl:
             plausible_hypothesis = "The final number of items is directly proportional to the perimeter."
             filled_tpl = filled_tpl.replace("{hypothesis}", plausible_hypothesis)
-        return filled_tpl
+        return filled_tpl, ai_persona # Trả về cả persona được cung cấp
 
-    # <<< THAY ĐỔI 2: Tách và mở rộng bộ Persona >>>
-    educator_personas = [
-        "A patient and encouraging tutor",
-        "A sharp, concise university professor",
-        "A friendly peer who explains things simply",
-        "An examiner focused on precision and keywords",
-        "A Socratic coach who asks guiding questions",
-        "A motivational coach focused on building confidence"
-    ]
-    student_personas = [
-        "A curious student who wants to know 'why'",
-        "An anxious student who needs a lot of reassurance",
-        "A practical student who wants real-world examples",
-        "A slightly confused student asking for a simpler explanation"
-    ]
-    
-    # 80% là educator, 20% là student để giả lập
-    if random.random() < 0.8:
-        persona = random.choice(educator_personas)
-    else:
-        persona = random.choice(student_personas)
-    
-    # Ghi đè persona nếu được cung cấp
-    if ai_persona:
-        persona = ai_persona
+    # KHÔNG CHỌN NGẪU NHIÊN NỮA, DÙNG TRỰC TIẾP THAM SỐ ĐƯỢC CUNG CẤP
+    persona = ai_persona
 
-    # <<< THAY ĐỔI 3: Hướng dẫn từ vựng theo Cognitive Level >>>
+    # (Code hướng dẫn level và prompt cho AI giữ nguyên)
     level_guidance = ""
-    if cognitive_level == 1:
-        level_guidance = "Use direct, simple language. Focus on 'how-to' and concrete steps. Keywords: calculate, find, list, show the steps."
-    elif cognitive_level == 2:
-        level_guidance = "Use language that promotes understanding. Focus on 'why' and 'what it means'. Keywords: explain, describe, illustrate, compare, what is the relationship."
-    elif cognitive_level >= 3:
-        level_guidance = "Use advanced language that requires analysis and evaluation. Focus on 'what if' and 'which is best'. Keywords: justify, critique, devise a strategy, optimize, what is the most efficient method."
+    if cognitive_level == 1: level_guidance = "Use direct, simple language. Focus on 'how-to' and concrete steps. Keywords: calculate, find, list, show the steps."
+    elif cognitive_level == 2: level_guidance = "Use language that promotes understanding. Focus on 'why' and 'what it means'. Keywords: explain, describe, illustrate, compare, what is the relationship."
+    elif cognitive_level >= 3: level_guidance = "Use advanced language that requires analysis and evaluation. Focus on 'what if' and 'which is best'. Keywords: justify, critique, devise a strategy, optimize, what is the most efficient method."
 
-    # <<< THAY ĐỔI 4: System & User Prompt được viết lại hoàn toàn >>>
-    sys = (
-        "You are a creative and expert prompt engineer specializing in K-12 math education. "
-        "Your task is to rewrite a prompt TEMPLATE by adopting a specific PERSONA and tailoring the language to a given COGNITIVE LEVEL. "
-        "You must output ONLY the final, rewritten prompt text."
-    )
-
+    sys = "You are a creative and expert prompt engineer specializing in K-12 math education. Your task is to rewrite a prompt TEMPLATE by adopting a specific PERSONA and tailoring the language to a given COGNITIVE LEVEL. You must output ONLY the final, rewritten prompt text."
     user = f"""
 You must rewrite the following prompt TEMPLATE.
-
 ### CONTEXT
 1.  **PERSONA to adopt**: "{persona}"
 2.  **COGNITIVE LEVEL of the problem**: L{cognitive_level}
 3.  **GUIDANCE for L{cognitive_level}**: "{level_guidance}"
-
 ### TEMPLATE (The core task you must preserve)
 {tpl}
-
 
 ### PROBLEM (To be inserted and used for context)
 {problem_text}
 
-
 ### REWRITE RULES
-1.  **ADAPT, DON'T JUST REPLACE**: Do not just robotically fill in the template. Creatively rewrite it to sound natural for the given PERSONA and appropriate for the COGNITIVE LEVEL. A student persona should sound like they are asking a question. An educator persona should sound like they are giving an instruction.
-2.  **PRESERVE THE CORE TASK**: The final prompt must still accomplish the main goal of the TEMPLATE (e.g., 'compare 3 strategies', 'review a solution').
+1.  **ADAPT, DON'T JUST REPLACE**: Creatively rewrite it to sound natural for the given PERSONA and appropriate for the COGNITIVE LEVEL.
+2.  **PRESERVE THE CORE TASK**: The final prompt must still accomplish the main goal of the TEMPLATE.
 3.  **INTELLIGENT PLACEHOLDER FILLING**:
-    * If `{{student_answer}}` is present, you MUST invent a plausible (but likely incorrect) student answer based on the PROBLEM. For example, a common conceptual error.
-    * If `{{hypothesis}}` is present, you MUST invent a simple, relevant hypothesis for the PROBLEM.
+    * If `{{student_answer}}` is present, you MUST invent a plausible (but likely incorrect) student answer.
+    * If `{{hypothesis}}` is present, you MUST invent a simple, relevant hypothesis.
     * NEVER leave placeholders like '[Student answer here]' in the output.
 4.  **INSERT PROBLEM TEXT**: Replace `{{problem_text}}` with the exact PROBLEM text.
-5.  **OUTPUT**: Return ONLY the final, rewritten prompt. No commentary, no explanations, no markdown.
+5.  **OUTPUT**: Return ONLY the final, rewritten prompt. No commentary or markdown.
 """.strip()
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
-        temperature=0.7, # <<< THAY ĐỔI 5: Tăng nhiệt độ để khuyến khích sự sáng tạo
-        max_tokens=600, # Tăng nhẹ để có không gian cho prompt dài hơn
-    )
+    resp = client.chat.completions.create(model=model, messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}], temperature=0.7, max_tokens=600)
     out = (resp.choices[0].message.content or "").strip()
     
-    # Dọn dẹp output
-    if out.startswith("`") and out.endswith("`"):
-        out = out.strip("`")
-    if out.startswith('"') and out.endswith('"'):
-        out = out.strip('"')
+    if out.startswith("`") and out.endswith("`"): out = out.strip("`")
+    if out.startswith('"') and out.endswith('"'): out = out.strip('"')
 
     return out, persona
