@@ -306,6 +306,8 @@ def run_ai_user_batch(
 
         for prompt_text, level_hint, prompt_name, sug_key in variants:
             run_id = str(uuid.uuid4())
+            prompt_analysis = {}
+            ph = {}
 
             # Analyzer
             try:
