@@ -324,7 +324,7 @@ init_session_state()
 
 with st.sidebar:
     st.markdown("## Problem Setup")
-    st.text("Version: v4.2.0")
+    st.text("Version: v5.0.0")
     is_disabled = st.session_state.classification_complete
     st.text_input("Your Name / ID", key="evaluator_name", disabled=is_disabled)
     st.radio("Content Domain", CONTENT_DOMAINS, key="content_domain", disabled=is_disabled)
