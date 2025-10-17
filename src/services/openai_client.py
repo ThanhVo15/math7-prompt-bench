@@ -371,4 +371,4 @@ You must rewrite the following prompt TEMPLATE.
     if out.startswith('"') and out.endswith('"'):
         out = out.strip('"')
 
-    return out
+    return out, persona
