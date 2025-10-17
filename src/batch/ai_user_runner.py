@@ -299,7 +299,7 @@ def run_ai_user_batch(
         for k in taxonomy_keys:
             sug = PROMPT_TAXONOMY[k]
             prompt_text = synthesize_prompt_from_suggestion(
-                problem_text=problem_text, suggestion=sug, model=paraphraser_model,
+                problem_text=problem_text, suggestion=sug,cognitive_level=cognitive_level, model=paraphraser_model,
                 ai_persona=persona, strict_fill=False,
             )
             variants.append((prompt_text, int(sug.get("level", 0)), str(sug["name"]), k))
