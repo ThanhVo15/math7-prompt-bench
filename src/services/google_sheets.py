@@ -42,30 +42,49 @@ class GoogleSheetManager:
             st.error(f"Lỗi khi mở worksheet '{sheet_name}': {e}")
             return None
 
-    def append_data(self, sheet_name: str, records: List[BaseModel]):
-        worksheet = self._get_worksheet(sheet_name)
-        if not worksheet or not records:
-            return
+    def append_data(self, sheet_name: str, records: list): # Allow generic list
+            worksheet = self._get_worksheet(sheet_name)
+            if not worksheet or not records:
+                return
 
-        data_to_append = [record.dict() for record in records]
-        df_to_append = pd.DataFrame(data_to_append)
+            # Prepare data by converting models to dicts, but pass existing dicts through.
+            data_to_append = []
+            for record in records:
+                if isinstance(record, dict):
+                    data_to_append.append(record)
+                elif hasattr(record, 'dict'):  # Handles Pydantic v1 models
+                    data_to_append.append(record.dict())
+                elif hasattr(record, 'model_dump'): # Handles Pydantic v2 models
+                    data_to_append.append(record.model_dump())
+                else:
+                    # Fallback for other object types, like dataclasses
+                    from dataclasses import asdict, is_dataclass
+                    if is_dataclass(record):
+                        data_to_append.append(asdict(record))
+                    else:
+                        data_to_append.append(record) # Append as is if unknown
 
-        # Chuẩn hóa datetime UTC -> string
-        for col in df_to_append.select_dtypes(include=["datetime64[ns, UTC]"]).columns:
-            df_to_append[col] = df_to_append[col].dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            df_to_append = pd.DataFrame(data_to_append)
 
-        try:
-            existing_data = worksheet.get_all_records()
-            if not existing_data:
-                set_with_dataframe(worksheet, df_to_append, include_index=False, resize=True)
-            else:
-                worksheet.append_rows(
-                    df_to_append.values.tolist(), value_input_option="USER_ENTERED"
-                )
-            st.toast(f"Đã lưu vào sheet '{sheet_name}'!", icon="✅")
-        except Exception as e:
-            st.error(f"Lỗi khi ghi dữ liệu vào sheet '{sheet_name}': {e}")
-            
+            # Chuẩn hóa datetime UTC -> string (logic remains the same)
+            for col in df_to_append.select_dtypes(include=["datetime64[ns, UTC]"]).columns:
+                df_to_append[col] = df_to_append[col].dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+            try:
+                existing_data = worksheet.get_all_records()
+                if not existing_data:
+                    set_with_dataframe(worksheet, df_to_append, include_index=False, resize=True)
+                else:
+                    # Ensure columns match before appending
+                    existing_headers = worksheet.row_values(1)
+                    df_to_append = df_to_append.reindex(columns=existing_headers).fillna('')
+                    worksheet.append_rows(
+                        df_to_append.values.tolist(), value_input_option="USER_ENTERED"
+                    )
+                st.toast(f"Đã lưu vào sheet '{sheet_name}'!", icon="✅")
+            except Exception as e:
+                st.error(f"Lỗi khi ghi dữ liệu vào sheet '{sheet_name}': {e}")
+
     def get_df(self, sheet_name: str) -> pd.DataFrame:
         """
         Đọc toàn bộ tab Google Sheets thành DataFrame.
@@ -111,5 +130,3 @@ class GoogleSheetManager:
 @st.cache_resource
 def get_gsheet_manager(_version: int = 2):
     return GoogleSheetManager()
-
-

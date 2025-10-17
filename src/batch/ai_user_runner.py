@@ -1,8 +1,7 @@
-# src/batch/ai_user_runner.py
 import time
 import uuid
 import random
-from typing import List, Tuple, Optional
+from typing import List, Dict, Optional, Any
 
 import streamlit as st
 
@@ -14,51 +13,211 @@ from src.services.openai_client import (
 )
 from src.core.tokenizer import AdvancedTokenizer
 from src.core.metrics import BasicMetrics
-from src.core.metrics_advanced import compute_advanced_metrics  # ✅ natural CDI/SSS/ARQ
+from src.core.metrics_advanced import compute_advanced_metrics
 from src.models.schemas import (
-    Run,
-    PromptMetrics,
-    Suggestion,
-    Evaluation,
-    AdvancedMetricsRecord,  # ✅ flattened schema for metrics_advanced
+    Run, PromptMetrics, Suggestion, Evaluation,
+    AdvancedMetricsRecord, AnalyzerScores, AnalyzerPattern, AdvancedMetricsPattern
 )
 from src.prompts.taxonomy import PROMPT_TAXONOMY
 from src.utils.text import clean_problem_text, generate_problem_id
 
+# --- Các hàm Utils giữ nguyên ---
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    if value is None: return default
+    try: return float(value)
+    except (ValueError, TypeError): return default
 
-# ---------------- Utils ----------------
+def _safe_int(value: Any, default: int = 0) -> int:
+    if value is None: return default
+    try: return int(float(value))
+    except (ValueError, TypeError): return default
+
 def _canon_ccss(s: str) -> str:
     return str(s or "").split("(")[0].strip().lower()
-
 
 def _parse_level_num(s: str) -> int:
     s = str(s or "")
     for ch in s:
-        if ch.isdigit():
-            return int(ch)
+        if ch.isdigit(): return int(ch)
     return 0
-
 
 def _map_context(sheet_val: str) -> str:
     v = (sheet_val or "").strip().lower()
-    return "Applied Math" if v in ["real-world", "real world", "applied", "realworld", "real"] else "Theorical Math"
+    return "Applied Math" if v in ["real-world", "real world", "applied", "realworld", "real"] else "Theoretical Math"
+
+def _to_dict_any(x: Any) -> Dict:
+    from dataclasses import is_dataclass, asdict
+    if x is None: return {}
+    if hasattr(x, "model_dump"): return x.model_dump()
+    if hasattr(x, "dict"):
+        try: return x.dict()
+        except Exception: pass
+    if is_dataclass(x): return asdict(x)
+    if isinstance(x, dict): return x
+    return {k: v for k, v in getattr(x, "__dict__", {}).items()}
+
+def _append_rows_safe(gsheet, sheet_name: str, items: list):
+    if not items: return
+    rows = [_to_dict_any(it) for it in items]
+    try:
+        gsheet.append_data(sheet_name, rows)
+    except Exception as e:
+        st.error(f"Lỗi ghi vào sheet '{sheet_name}': {e}")
 
 
-def _band_to_score(band: Optional[str]) -> Optional[int]:
-    if not band:
+# =================================================================================
+# === NÂNG CẤP 1: Tách logic xử lý ra hàm helper riêng                       ===
+# === NÂNG CẤP 2: Bọc toàn bộ logic trong try-except để đảm bảo tính toàn vẹn   ===
+# =================================================================================
+def _process_single_prompt_variant(
+    *,
+    run_id: str,
+    prompt_text: str,
+    problem_id: str,
+    problem_text: str,
+    content_domain: str,
+    cognitive_level: int,
+    problem_context: str,
+    level_hint: int,
+    prompt_name: str,
+    sug_key: Optional[int],
+    ai_user_id: str,
+    ai_grader: str,
+    persona: str,
+    analyzer_model: str,
+    solver_model: str,
+    tokenizer: AdvancedTokenizer,
+    metrics: BasicMetrics
+) -> Optional[Dict[str, Any]]:
+    """
+    Xử lý toàn bộ chu trình cho một prompt: Analyzer -> Solver -> Metrics -> Gói dữ liệu.
+    Trả về một dictionary chứa tất cả các đối tượng dữ liệu, hoặc None nếu có lỗi.
+    """
+    try:
+        # --- 1. AI Calls ---
+        analysis = get_analysis_from_analyzer(
+            user_prompt=prompt_text, problem_text=problem_text, model=analyzer_model
+        )
+        prompt_analysis = analysis.get("prompt_analysis", {}) or {}
+
+        sol = get_solution_from_solver(
+            user_prompt=prompt_text, problem_text=problem_text, model=solver_model
+        )
+        solution_text = sol.get("solution_text") or "--- NO SOLUTION TEXT ---"
+
+        # --- 2. Metrics Calculation ---
+        ph = prompt_analysis.get("pattern_hits", {})
+        adv_vals = compute_advanced_metrics(prompt_text, ai_pattern_hits=ph)
+        pm = metrics.compute(prompt_text, tokenizer, run_id=run_id, w=10)
+
+        # --- 3. Data Assembly ---
+        cdi = adv_vals.get("cdi", {})
+        sss = adv_vals.get("sss", {})
+        arq = adv_vals.get("arq", {})
+        hits = adv_vals.get("hits", {})
+        sig = prompt_analysis.get("signals", {})
+        bands = prompt_analysis.get("qualitative_scores", {})
+        ai_est = prompt_analysis.get("ai_estimated", {})
+
+        # Gói dữ liệu vào các Pydantic models
+        adv_record = AdvancedMetricsRecord(
+            run_id=run_id, session_id=str(uuid.uuid4())[:8], user_id=ai_user_id, prompt_text=prompt_text,
+            cdi_rate_cognitive_verbs=_safe_float(cdi.get("rate_cognitive_verbs")),
+            cdi_lexical_density=_safe_float(cdi.get("lexical_density")),
+            cdi_clauses_per_sentence=_safe_float(cdi.get("clauses_per_sentence")),
+            cdi_rate_abstract_terms=_safe_float(cdi.get("rate_abstract_terms")),
+            cdi_composite=_safe_float(cdi.get("cdi_composite")),
+            sss_n_examples=_safe_int(sss.get("n_examples")), sss_n_step_markers=_safe_int(sss.get("n_step_markers")),
+            sss_n_formula_markers=_safe_int(sss.get("n_formula_markers")), sss_n_hints=_safe_int(sss.get("n_hints")),
+            sss_weighted=_safe_float(sss.get("sss_weighted")),
+            arq_abstract_terms=_safe_int(arq.get("abstract_terms")), arq_numbers=_safe_int(arq.get("numbers")),
+            arq_ratio=_safe_float(arq.get("ratio")), arq_meta_bonus=_safe_float(arq.get("meta_bonus")),
+            arq_score=_safe_float(arq.get("arq_score")),
+        )
+        
+        metrics_pattern_record = AdvancedMetricsPattern(
+            run_id=run_id, session_id=adv_record.session_id, user_id=ai_user_id, prompt_text=prompt_text,
+            cdi_c_rate=_safe_float(cdi.get("rate_cognitive_verbs")), cdi_a_rate=_safe_float(cdi.get("rate_abstract_terms")),
+            cdi_ld=_safe_float(cdi.get("lexical_density")), cdi_cps=_safe_float(cdi.get("clauses_per_sentence")),
+            sss_log=_safe_float(sss.get("sss_weighted")), arq_meta=bool(arq.get("meta_gate")),
+            c_terms_backend="|".join(hits.get("c_terms", [])), a_terms_backend="|".join(hits.get("a_terms", [])),
+            meta_terms_backend="|".join(hits.get("meta_terms", [])),
+            examples_hits="|".join(hits.get("examples", [])), step_markers_hits="|".join(hits.get("step_markers", [])),
+            formula_marks_hits="|".join(hits.get("formula_marks", [])), hints_hits="|".join(hits.get("hints", [])),
+            numbers_hits="|".join(hits.get("numbers", [])),
+            cdi_index=_safe_float(cdi.get("cdi_composite")),
+            sss_total=_safe_int(sss.get("sss_raw")),
+            arq_ratio=_safe_float(arq.get("ratio")), arq_index=_safe_float(arq.get("arq_score")),
+        )
+
+        analyzer_score_record = AnalyzerScores(
+            run_id=run_id, session_id=adv_record.session_id, user_id=ai_user_id, prompt_text=prompt_text, problem_id=problem_id,
+            tokens=_safe_int(sig.get("tokens")), sentences=_safe_int(sig.get("sentences")),
+            avg_tokens_per_sentence=_safe_float(sig.get("avg_tokens_per_sentence")),
+            avg_clauses_per_sentence=_safe_float(sig.get("avg_clauses_per_sentence")),
+            cognitive_verbs_count=_safe_int(sig.get("cognitive_verbs_count")), abstract_terms_count=_safe_int(sig.get("abstract_terms_count")),
+            clarity_score=_safe_int(bands.get("clarity_score")), specificity_score=_safe_int(bands.get("specificity_score")),
+            structure_score=_safe_int(bands.get("structure_score")), mattr_like_0_1=_safe_float(ai_est.get("mattr_like")),
+            reading_ease_like=_safe_float(ai_est.get("reading_ease_like")), cdi_like=_safe_float(ai_est.get("cdi_like")),
+            sss_like=_safe_float(ai_est.get("sss_like")), arq_like=_safe_float(ai_est.get("arq_like")),
+            confidence=str(ai_est.get("confidence", "")),
+        )
+
+        analyzer_pattern_record = AnalyzerPattern(
+            run_id=run_id, session_id=adv_record.session_id, user_id=ai_user_id, prompt_text=prompt_text, problem_id=problem_id,
+            cognitive_terms_ai="|".join(ph.get("cognitive_terms", [])), abstract_terms_ai="|".join(ph.get("abstract_terms", [])),
+            meta_terms_ai="|".join(ph.get("meta_terms", [])), logic_connectors_ai="|".join(ph.get("logic_connectors", [])),
+            modals_ai="|".join(ph.get("modals", [])), step_markers_ai="|".join(ph.get("step_markers", [])),
+            examples_ai="|".join(ph.get("examples", [])), formula_markers_ai="|".join(ph.get("formula_markers", [])),
+            hints_ai="|".join(ph.get("hints", [])), numbers_ai="|".join(ph.get("numbers", [])),
+            sections_ai="|".join(ph.get("sections", [])), output_rules_ai="|".join(ph.get("output_rules", [])),
+        )
+
+        run_obj = Run(
+            run_id=run_id, session_id=adv_record.session_id, user_id=ai_user_id, ai_persona=persona,
+            problem_id=problem_id, problem_text=problem_text, content_domain=content_domain,
+            cognitive_level=cognitive_level, problem_context=problem_context,
+            prompt_text=prompt_text, prompt_level=level_hint, prompt_name=prompt_name,
+            solver_model_name=solver_model, response_text=solution_text,
+            latency_ms=_safe_int(sol.get("latency_ms")),
+            tokens_in=_safe_int((sol.get("usage") or {}).get("prompt_tokens")),
+            tokens_out=_safe_int((sol.get("usage") or {}).get("completion_tokens")),
+        )
+
+        suggestion_record = None
+        if sug_key is not None:
+            suggestion_record = Suggestion(
+                run_id=run_id, session_id=run_obj.session_id, user_id=ai_user_id,
+                suggestion_key=_safe_int(sug_key), suggestion_name=prompt_name,
+                suggested_level=level_hint, accepted=True,
+            )
+        
+        evaluation_record = Evaluation(
+            run_id=run_id, grader_id=ai_grader, correctness_score=1,
+            evaluation_notes="Auto (AI batch). Please review.",
+        )
+
+        # Trả về một dictionary chứa tất cả các đối tượng
+        return {
+            "run": run_obj, "metrics": pm, "adv_metrics": adv_record,
+            "metrics_pattern": metrics_pattern_record, "analyzer_score": analyzer_score_record,
+            "analyzer_pattern": analyzer_pattern_record, "suggestion": suggestion_record,
+            "evaluation": evaluation_record
+        }
+
+    except Exception as e:
+        st.warning(f"Lỗi khi xử lý prompt '{prompt_name}' cho problem ID {problem_id[:8]}: {e}")
         return None
-    m = {"low": 40, "medium": 70, "high": 90}
-    return m.get(str(band).strip().lower())
 
 
 # -------------- Main --------------
 def run_ai_user_batch(
     *,
     sheet_name: str = "problems",
-    ccss_filters: List[str],      # allow empty => all
-    level_filters: List[str],     # e.g. ["Level 1","Level 3"] or ["1","3"]
-    context_filters: List[str],   # allow empty => all
-    evaluator_name: str,          # dùng cho user_id & grader_id
+    ccss_filters: List[str],
+    level_filters: List[str],
+    context_filters: List[str],
+    evaluator_name: str,
     include_baseline: bool = True,
     analyzer_model: str = "gpt-3.5-turbo",
     solver_model: str = "gpt-3.5-turbo",
@@ -66,7 +225,7 @@ def run_ai_user_batch(
     throttle_sec: float = 0.15,
     flush_every: int = 20,
 ):
-    gsheet = get_gsheet_manager(_version=2)  # giữ theo bản của bạn
+    gsheet = get_gsheet_manager(_version=2)
     df = gsheet.get_df(sheet_name)
     if df.empty:
         st.error(f"Sheet '{sheet_name}' rỗng hoặc đọc lỗi.")
@@ -79,25 +238,14 @@ def run_ai_user_batch(
             st.error(f"Thiếu cột '{n}' trong sheet '{sheet_name}'.")
             return {"selected": 0, "created_runs": 0}
 
-    # ---- Chuẩn hoá filter ----
     ccss_norm = {_canon_ccss(x) for x in ccss_filters} if ccss_filters else set()
     lvl_set_nums = {_parse_level_num(x) for x in level_filters} if level_filters else set()
-    # Chuẩn hoá context filter sang canonical để khớp với _map_context
     ctx_norm = {str(x).strip().lower() for x in context_filters} if context_filters else set()
 
-    def pass_ccss(x):
-        if not ccss_norm:
-            return True
-        return _canon_ccss(x) in ccss_norm
-
-    def pass_level(x):
-        if not lvl_set_nums:
-            return True
-        return _parse_level_num(x) in lvl_set_nums
-
+    def pass_ccss(x): return True if not ccss_norm else _canon_ccss(x) in ccss_norm
+    def pass_level(x): return True if not lvl_set_nums else _parse_level_num(x) in lvl_set_nums
     def pass_ctx(x):
-        if not ctx_norm:
-            return True
+        if not ctx_norm: return True
         v = str(x or "").strip().lower()
         return v in ctx_norm
 
@@ -114,11 +262,9 @@ def run_ai_user_batch(
     tokenizer = AdvancedTokenizer()
     metrics = BasicMetrics()
 
-    runs_buf: List[Run] = []
-    metrics_buf: List[PromptMetrics] = []
-    adv_buf: List[AdvancedMetricsRecord] = []
-    suggestions_buf: List[Suggestion] = []
-    evals_buf: List[Evaluation] = []
+    runs_buf, metrics_buf, adv_buf = [], [], []
+    suggestions_buf, evals_buf = [], []
+    analyzer_scores_buf, analyzer_patterns_buf, metrics_patterns_buf = [], [], []
 
     taxonomy_keys = sorted(PROMPT_TAXONOMY.keys())
     total_tasks = len(df_sel) * (len(taxonomy_keys) + (1 if include_baseline else 0))
@@ -130,6 +276,11 @@ def run_ai_user_batch(
     ai_user_id = f"{evaluator_name} - AI"
     ai_grader = ai_user_id
 
+    persona_pool = [
+        "concise teacher", "friendly tutor", "examiner style", "Socratic coach",
+        "motivational tutor", "precision-focused analyst", "step-by-step coach", "structured outline mentor",
+    ]
+
     for _, row in df_sel.iterrows():
         raw_problem = row[cols["problem"]]
         problem_text = clean_problem_text(raw_problem)
@@ -138,207 +289,209 @@ def run_ai_user_batch(
         cognitive_level = _parse_level_num(row[cols["level"]])
         problem_context = _map_context(row[cols["abstract / real-world"]])
 
-        # ---- Tạo các biến thể prompt ----
-        variants: List[Tuple[str, int, str, int | None]] = []
+        persona = random.choice(persona_pool)
+
+        variants = []
         if include_baseline:
-            variants.append(("Solve this problem.", 0, "Baseline", None))
+            baseline_text = f"Solve this problem:\n{problem_text}"
+            variants.append((baseline_text, 1, "Zero-Shot Baseline", None))
 
         for k in taxonomy_keys:
             sug = PROMPT_TAXONOMY[k]
             prompt_text = synthesize_prompt_from_suggestion(
-                problem_text=problem_text, suggestion=sug, model=paraphraser_model
+                problem_text=problem_text, suggestion=sug, model=paraphraser_model,
+                ai_persona=persona, strict_fill=False,
             )
             variants.append((prompt_text, int(sug.get("level", 0)), str(sug["name"]), k))
 
         for prompt_text, level_hint, prompt_name, sug_key in variants:
-            # Chuẩn bị run_id để đồng bộ mọi bảng
             run_id = str(uuid.uuid4())
 
-            # ---------- Analyzer ----------
+            # Analyzer
             try:
-                analysis = get_analysis_from_analyzer(
-                    user_prompt=prompt_text, problem_text=problem_text, model=analyzer_model
-                )
+                analysis = get_analysis_from_analyzer(user_prompt=prompt_text, problem_text=problem_text, model=analyzer_model)
                 prompt_analysis = analysis.get("prompt_analysis", {}) or {}
             except Exception as e:
                 prompt_analysis = {}
                 st.warning(f"Analyzer lỗi: {e}")
 
-            # ---------- Solver ----------
+            # Solver
             try:
-                sol = get_solution_from_solver(
-                    user_prompt=prompt_text, problem_text=problem_text, model=solver_model
-                )
+                sol = get_solution_from_solver(user_prompt=prompt_text, problem_text=problem_text, model=solver_model)
                 solution_text = sol.get("solution_text") or ""
             except Exception as e:
-                sol = {}
-                solution_text = f"--- ERROR --- {e}"
+                sol, solution_text = {}, f"--- ERROR --- {e}"
                 st.warning(f"Solver lỗi: {e}")
 
-            # ---------- Basic metrics (deterministic) ----------
-            pm = metrics.compute(prompt_text, tokenizer, run_id=run_id, w=10)
-            metrics_buf.append(pm)
-
-            # ---------- Advanced metrics (CDI/SSS/ARQ) ----------
-            cdi_comp = sss_w = arq_s = None
+            # Metrics
             try:
-                adv_vals = compute_advanced_metrics(prompt_text)  # {"cdi": {...}, "sss": {...}, "arq": {...}}
-                cdi = adv_vals.get("cdi", {}) or {}
-                sss = adv_vals.get("sss", {}) or {}
-                arq = adv_vals.get("arq", {}) or {}
-
-                # aggregates cho bảng runs
-                cdi_comp = float(cdi.get("cdi_composite", 0.0))
-                sss_w = float(sss.get("sss_weighted", 0.0))
-                arq_s = float(arq.get("arq_score", 0.0))
-
-                # flattened record cho metrics_advanced
-                adv_rec = AdvancedMetricsRecord(
-                    run_id=run_id,
-                    session_id=str(uuid.uuid4())[:8],
-                    user_id=ai_user_id,
-                    prompt_text=prompt_text,
-                    cdi_rate_cognitive_verbs=float(cdi.get("rate_cognitive_verbs", 0.0)),
-                    cdi_lexical_density=float(cdi.get("lexical_density", 0.0)),
-                    cdi_clauses_per_sentence=float(cdi.get("clauses_per_sentence", 0.0)),
-                    cdi_rate_abstract_terms=float(cdi.get("rate_abstract_terms", 0.0)),
-                    cdi_composite=float(cdi.get("cdi_composite", 0.0)),
-                    sss_n_examples=int(sss.get("n_examples", 0)),
-                    sss_n_step_markers=int(sss.get("n_step_markers", 0)),
-                    sss_n_formula_markers=int(sss.get("n_formula_markers", 0)),
-                    sss_n_hints=int(sss.get("n_hints", 0)),
-                    sss_weighted=float(sss.get("sss_weighted", 0.0)),
-                    arq_abstract_terms=int(arq.get("abstract_terms", 0)),
-                    arq_numbers=int(arq.get("numbers", 0)),
-                    arq_ratio=float(arq.get("ratio", 0.0)),
-                    arq_meta_bonus=float(arq.get("meta_bonus", 0.0)),
-                    arq_score=float(arq.get("arq_score", 0.0)),
-                )
-                adv_buf.append(adv_rec)
-            except Exception as _e:
-                # Không chặn batch
+                pm = metrics.compute(prompt_text, tokenizer, run_id=run_id, w=10)
+                metrics_buf.append(pm)
+            except Exception:
                 pass
 
-            # ---------- Map Analyzer (schema mới + fallback cũ) ----------
+            # Advanced metrics
+            adv_vals = {}
+            try:
+                adv_vals = compute_advanced_metrics(prompt_text, ai_pattern_hits=ph)
+                cdi = adv_vals.get("cdi", {})
+                sss = adv_vals.get("sss", {})
+                arq = adv_vals.get("arq", {})
+                hits = adv_vals.get("hits", {})
+
+                adv_buf.append(AdvancedMetricsRecord(
+                    run_id=run_id, session_id=str(uuid.uuid4())[:8], user_id=ai_user_id,
+                    prompt_text=prompt_text,
+                    cdi_rate_cognitive_verbs=_safe_float(cdi.get("rate_cognitive_verbs")),
+                    cdi_lexical_density=_safe_float(cdi.get("lexical_density")),
+                    cdi_clauses_per_sentence=_safe_float(cdi.get("clauses_per_sentence")),
+                    cdi_rate_abstract_terms=_safe_float(cdi.get("rate_abstract_terms")),
+                    cdi_composite=_safe_float(cdi.get("cdi_composite")),
+                    sss_n_examples=_safe_int(sss.get("n_examples")),
+                    sss_n_step_markers=_safe_int(sss.get("n_step_markers")),
+                    sss_n_formula_markers=_safe_int(sss.get("n_formula_markers")),
+                    sss_n_hints=_safe_int(sss.get("n_hints")),
+                    sss_weighted=_safe_float(sss.get("sss_weighted")),
+                    arq_abstract_terms=_safe_int(arq.get("abstract_terms")),
+                    arq_numbers=_safe_int(arq.get("numbers")),
+                    arq_ratio=_safe_float(arq.get("ratio")),
+                    arq_meta_bonus=_safe_float(arq.get("meta_bonus")),
+                    arq_score=_safe_float(arq.get("arq_score")),
+                ))
+                
+                metrics_patterns_buf.append(AdvancedMetricsPattern(
+                    run_id=run_id, session_id=str(uuid.uuid4())[:8], user_id=ai_user_id,
+                    prompt_text=prompt_text,
+                    cdi_c_rate=_safe_float(cdi.get("rate_cognitive_verbs")),
+                    cdi_a_rate=_safe_float(cdi.get("rate_abstract_terms")),
+                    cdi_ld=_safe_float(cdi.get("lexical_density")),
+                    cdi_cps=_safe_float(cdi.get("clauses_per_sentence")),
+                    sss_log=_safe_float(sss.get("sss_weighted")),
+                    arq_meta=_safe_float(arq.get("meta_bonus")),
+                    c_terms_backend="|".join(hits.get("c_terms", [])),
+                    a_terms_backend="|".join(hits.get("a_terms", [])),
+                    meta_terms_backend="|".join(hits.get("meta_terms", [])),
+                    examples_hits="|".join(hits.get("examples", [])),
+                    step_markers_hits="|".join(hits.get("step_markers", [])),
+                    formula_marks_hits="|".join(hits.get("formula_marks", [])),
+                    hints_hits="|".join(hits.get("hints", [])),
+                    numbers_hits="|".join(hits.get("numbers", [])),
+                    cdi_index=_safe_float(cdi.get("cdi_composite")),
+                    sss_total=(_safe_int(sss.get("n_examples")) + _safe_int(sss.get("n_step_markers")) +
+                               _safe_int(sss.get("n_formula_markers")) + _safe_int(sss.get("n_hints"))),
+                    arq_ratio=_safe_float(arq.get("ratio")),
+                    arq_index=_safe_float(arq.get("arq_score")),
+                ))
+
+            except Exception as e:
+                st.warning(f"Lỗi tính toán/ghi nhận advanced metrics cho run_id {run_id}: {e}")
+
+            # Analyzer Scores + Pattern
             sig = (prompt_analysis.get("signals") or {})
             bands = (prompt_analysis.get("qualitative_scores") or {})
-            # mới: ai_estimated ; cũ: estimated_metrics
-            ai_est = (prompt_analysis.get("ai_estimated")
-                      or prompt_analysis.get("estimated_metrics")
-                      or {})
+            ai_est = (prompt_analysis.get("ai_estimated") or {})
+            ph = (prompt_analysis.get("pattern_hits") or {})
+            
+            # =========================================================================
+            # === FIX: Sử dụng hàm ép kiểu an toàn khi đọc dữ liệu từ AI Analyzer    ===
+            # =========================================================================
+            analyzer_scores_buf.append(AnalyzerScores(
+                run_id=run_id, session_id=str(uuid.uuid4())[:8], user_id=ai_user_id,
+                prompt_text=prompt_text, problem_id=problem_id,
+                tokens=_safe_int(sig.get("tokens")),
+                sentences=_safe_int(sig.get("sentences")),
+                avg_tokens_per_sentence=_safe_float(sig.get("avg_tokens_per_sentence")),
+                avg_clauses_per_sentence=_safe_float(sig.get("avg_clauses_per_sentence")),
+                cognitive_verbs_count=_safe_int(sig.get("cognitive_verbs_count")),
+                abstract_terms_count=_safe_int(sig.get("abstract_terms_count")),
+                clarity_score=_safe_int(bands.get("clarity_score")),
+                specificity_score=_safe_int(bands.get("specificity_score")),
+                structure_score=_safe_int(bands.get("structure_score")),
+                mattr_like=_safe_float(ai_est.get("mattr_like")),
+                reading_ease_like=_safe_float(ai_est.get("reading_ease_like")),
+                cdi_like=_safe_float(ai_est.get("cdi_like")),
+                sss_like=_safe_float(ai_est.get("sss_like")),
+                arq_like=_safe_float(ai_est.get("arq_like")),
+                confidence=str(ai_est.get("confidence", "")),
+            ))
 
-            clarity_v = _band_to_score(bands.get("clarity_band")) or bands.get("clarity_score")
-            specificity_v = _band_to_score(bands.get("specificity_band")) or bands.get("specificity_score")
-            structure_v = _band_to_score(bands.get("structure_band")) or bands.get("structure_score")
-
-            est_token_count = sig.get("tokens") or ai_est.get("estimated_token_count")
-            est_mattr = ai_est.get("mattr_like", ai_est.get("estimated_mattr_score"))
-            est_reading = ai_est.get("reading_ease_like", ai_est.get("estimated_reading_ease"))
-
-            # Chuẩn hoá 0..1 → 0..100 nếu cần
-            if isinstance(est_mattr, (int, float)) and est_mattr is not None and est_mattr <= 1:
-                est_mattr = est_mattr * 100.0
-            if isinstance(est_reading, (int, float)) and est_reading is not None and est_reading <= 1:
-                est_reading = est_reading * 100.0
-
-            # ---------- Build Run ----------
-            run = Run(
-                run_id=run_id,
-                session_id=str(uuid.uuid4())[:8],
-                user_id=ai_user_id,
-                problem_id=problem_id,
-                problem_text=problem_text,
-                content_domain=content_domain,
-                cognitive_level=cognitive_level,
-                problem_context=problem_context,
-                prompt_text=prompt_text,
-                prompt_level=level_hint,
-                prompt_name=prompt_name,
-                solver_model_name=solver_model,
-                response_text=solution_text,
-                clarity_score=clarity_v,
-                specificity_score=specificity_v,
-                structure_score=structure_v,
-                estimated_token_count=est_token_count,
-                estimated_mattr_score=est_mattr,
-                estimated_reading_ease=est_reading,
-                analysis_rationale=prompt_analysis.get("overall_evaluation") if prompt_analysis else None,
-                # aggregates từ advanced metrics
-                cdi_composite=cdi_comp,
-                sss_weighted=sss_w,
-                arq_score=arq_s,
-                latency_ms=sol.get("latency_ms", 0),
-                tokens_in=(sol.get("usage") or {}).get("prompt_tokens", 0),
-                tokens_out=(sol.get("usage") or {}).get("completion_tokens", 0),
+            analyzer_patterns_buf.append(AnalyzerPattern(
+                run_id=run_id, session_id=str(uuid.uuid4())[:8], user_id=ai_user_id,
+                prompt_text=prompt_text, problem_id=problem_id,
+                cognitive_terms_ai="|".join(ph.get("cognitive_terms", [])),
+                abstract_terms_ai="|".join(ph.get("abstract_terms", [])),
+                meta_terms_ai="|".join(ph.get("meta_terms", [])),
+                logic_connectors_ai="|".join(ph.get("logic_connectors", [])),
+                modals_ai="|".join(ph.get("modals", [])),
+                step_markers_ai="|".join(ph.get("step_markers", [])),
+                examples_ai="|".join(ph.get("examples", [])),
+                formula_markers_ai="|".join(ph.get("formula_markers", [])),
+                hints_ai="|".join(ph.get("hints", [])),
+                numbers_ai="|".join(ph.get("numbers", [])),
+                sections_ai="|".join(ph.get("sections", [])),
+                output_rules_ai="|".join(ph.get("output_rules", [])),
+            ))
+            
+            # Suggestion + Evaluation + Run
+            run_obj = Run(
+                run_id=run_id, session_id=str(uuid.uuid4())[:8], user_id=ai_user_id,
+                problem_id=problem_id, problem_text=problem_text, content_domain=content_domain,
+                cognitive_level=cognitive_level, problem_context=problem_context,
+                prompt_text=prompt_text, prompt_level=level_hint, prompt_name=prompt_name,
+                solver_model_name=solver_model, response_text=solution_text,
+                clarity_score=_safe_int(bands.get("clarity_score")),
+                specificity_score=_safe_int(bands.get("specificity_score")),
+                structure_score=_safe_int(bands.get("structure_score")),
+                estimated_token_count=_safe_int(sig.get("tokens")),
+                estimated_mattr_score=_safe_float(ai_est.get("mattr_like")),
+                estimated_reading_ease=_safe_float(ai_est.get("reading_ease_like")),
+                cdi_composite=_safe_float(adv_vals.get("cdi", {}).get("cdi_composite")),
+                sss_weighted=_safe_float(adv_vals.get("sss", {}).get("sss_weighted")),
+                arq_score=_safe_float(adv_vals.get("arq", {}).get("arq_score")),
+                analysis_rationale=prompt_analysis.get("overall_evaluation"),
+                latency_ms=_safe_int(sol.get("latency_ms")),
+                tokens_in=_safe_int((sol.get("usage") or {}).get("prompt_tokens")),
+                tokens_out=_safe_int((sol.get("usage") or {}).get("completion_tokens")),
             )
-            runs_buf.append(run)
+            run_row = _to_dict_any(run_obj)
+            run_row["ai_persona"] = persona
+            runs_buf.append(run_row)
 
-            # ---------- Suggestion ----------
             if sug_key is not None:
-                suggestions_buf.append(
-                    Suggestion(
-                        run_id=run_id,
-                        session_id=run.session_id,
-                        user_id=run.user_id,
-                        suggestion_key=int(sug_key),
-                        suggestion_name=prompt_name,
-                        suggested_level=level_hint,
-                        accepted=True,
-                    )
-                )
+                suggestions_buf.append(Suggestion(
+                    run_id=run_id, session_id=run_row["session_id"],
+                    user_id=run_row["user_id"], suggestion_key=_safe_int(sug_key),
+                    suggestion_name=prompt_name, suggested_level=level_hint, accepted=True,
+                ))
 
-            # ---------- Auto evaluation ----------
-            evals_buf.append(
-                Evaluation(
-                    run_id=run_id,
-                    grader_id=ai_grader,
-                    correctness_score=1,
-                    evaluation_notes="Auto (AI batch). Please review.",
-                )
-            )
+            evals_buf.append(Evaluation(
+                run_id=run_id, grader_id=ai_grader, correctness_score=1,
+                evaluation_notes="Auto (AI batch). Please review.",
+            ))
 
-            # ---------- Progress & Flush ----------
             done += 1
             if len(runs_buf) >= flush_every:
-                try:
-                    if runs_buf:
-                        gsheet.append_data("runs", runs_buf)
-                    if metrics_buf:
-                        gsheet.append_data("metrics_deterministic", metrics_buf)
-                    if adv_buf:
-                        gsheet.append_data("metrics_advanced", adv_buf)
-                    if suggestions_buf:
-                        gsheet.append_data("suggestions", suggestions_buf)
-                    if evals_buf:
-                        gsheet.append_data("evaluations", evals_buf)
-                except Exception as e:
-                    st.error(f"Lỗi ghi batch: {e}")
+                _append_rows_safe(gsheet, "runs", runs_buf); runs_buf.clear()
+                _append_rows_safe(gsheet, "metrics_deterministic", metrics_buf); metrics_buf.clear()
+                _append_rows_safe(gsheet, "metrics_advanced", adv_buf); adv_buf.clear()
+                _append_rows_safe(gsheet, "suggestions", suggestions_buf); suggestions_buf.clear()
+                _append_rows_safe(gsheet, "evaluations", evals_buf); evals_buf.clear()
+                _append_rows_safe(gsheet, "analyzer_scores", analyzer_scores_buf); analyzer_scores_buf.clear()
+                _append_rows_safe(gsheet, "analyzer_patterns", analyzer_patterns_buf); analyzer_patterns_buf.clear()
+                _append_rows_safe(gsheet, "metrics_patterns", metrics_patterns_buf); metrics_patterns_buf.clear()
 
-                runs_buf.clear()
-                metrics_buf.clear()
-                adv_buf.clear()
-                suggestions_buf.clear()
-                evals_buf.clear()
-
-            status.write(f"AI User: {done}/{total_tasks} | {content_domain} | L{cognitive_level} | {prompt_name}")
+            status.write(f"AI User: {done}/{total_tasks} | {content_domain} | L{cognitive_level} | {prompt_name} | persona={persona}")
             progress.progress(min(1.0, done / total_tasks))
             time.sleep(throttle_sec)
 
-    # ---------- Flush phần còn lại ----------
-    if runs_buf or metrics_buf or adv_buf or suggestions_buf or evals_buf:
-        try:
-            if runs_buf:
-                gsheet.append_data("runs", runs_buf)
-            if metrics_buf:
-                gsheet.append_data("metrics_deterministic", metrics_buf)
-            if adv_buf:
-                gsheet.append_data("metrics_advanced", adv_buf)
-            if suggestions_buf:
-                gsheet.append_data("suggestions", suggestions_buf)
-            if evals_buf:
-                gsheet.append_data("evaluations", evals_buf)
-        except Exception as e:
-            st.error(f"Lỗi ghi batch cuối: {e}")
+    _append_rows_safe(gsheet, "runs", runs_buf)
+    _append_rows_safe(gsheet, "metrics_deterministic", metrics_buf)
+    _append_rows_safe(gsheet, "metrics_advanced", adv_buf)
+    _append_rows_safe(gsheet, "suggestions", suggestions_buf)
+    _append_rows_safe(gsheet, "evaluations", evals_buf)
+    _append_rows_safe(gsheet, "analyzer_scores", analyzer_scores_buf)
+    _append_rows_safe(gsheet, "analyzer_patterns", analyzer_patterns_buf)
+    _append_rows_safe(gsheet, "metrics_patterns", metrics_patterns_buf)
 
     progress.progress(1.0)
     status.write("✅ AI User hoàn tất.")

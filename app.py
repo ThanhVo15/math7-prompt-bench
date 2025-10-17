@@ -1,10 +1,10 @@
-# app.py
 import streamlit as st
 import uuid
 import random
 from datetime import datetime
 import re
-
+from typing import Optional
+import json
 # --- LOCAL IMPORTS ---
 from src.core.tokenizer import AdvancedTokenizer
 from src.core.metrics import BasicMetrics
@@ -21,8 +21,10 @@ from src.models.schemas import (
     Suggestion,
     Evaluation,
     AdvancedMetricsRecord,
+    AnalyzerScores,
+    AnalyzerPattern,
+    AdvancedMetricsPattern,
 )
-from typing import Optional
 
 # =========================
 # PAGE CONFIG
@@ -31,7 +33,7 @@ st.set_page_config(layout="wide", page_title="PromptOptima")
 
 tokenizer = AdvancedTokenizer()
 metrics_service = BasicMetrics()
-gsheet_manager = get_gsheet_manager()  # ✅ no _version arg
+gsheet_manager = get_gsheet_manager()  # ✅ giữ nguyên logic cũ
 
 # =========================
 # STATIC DATA
@@ -48,11 +50,11 @@ COGNITIVE_LEVELS = {
     2: "Level 2: Conceptual Understanding",
     3: "Level 3: Strategic Reasoning",
 }
-PROBLEM_CONTEXTS = ["Theorical Math", "Applied Math"]
+PROBLEM_CONTEXTS = ["Theoretical Math", "Applied Math", "Test"]
 DEFAULT_PROMPT = "Solve this problem."
 
 # =========================
-# HELPERS (stable problem_id)
+# HELPERS
 # =========================
 def _normalize_problem_text(text: str) -> str:
     t = (text or "").lower().strip()
@@ -62,6 +64,12 @@ def _normalize_problem_text(text: str) -> str:
 def generate_problem_id(problem_text: str) -> str:
     norm = _normalize_problem_text(problem_text)
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"promptoptima:problem:{norm}"))
+
+def _band_to_score(band: Optional[str]) -> Optional[int]:
+    if not band:
+        return None
+    m = {"low": 40, "medium": 70, "high": 90}
+    return m.get(str(band).strip().lower())
 
 # =========================
 # SESSION STATE
@@ -112,7 +120,6 @@ def handle_submission(user_input: str):
     prompt_analysis, solution_text, solver_response = {}, "", {}
     try:
         with st.spinner("🔎 Running analyzer & solver..."):
-            # ✅ pass problem_text to analyzer so it can consider the task context
             analysis_response = get_analysis_from_analyzer(
                 user_prompt=user_input,
                 problem_text=problem_text
@@ -130,7 +137,7 @@ def handle_submission(user_input: str):
         st.warning("Không gọi được AI, hiển thị thông tin lỗi thay thế.")
         solution_text = f"--- ERROR ---\n{e}"
 
-    # Append assistant message to chat
+    # Append assistant message
     st.session_state.chat_history.append(
         {
             "role": "assistant",
@@ -143,27 +150,16 @@ def handle_submission(user_input: str):
         }
     )
 
-    # Compute basic metrics on the PROMPT text
+    # Compute deterministic metrics
     try:
-        metrics_record = metrics_service.compute(
-            user_input, tokenizer, run_id=current_run_id
-        )
-    except Exception as _e:
+        metrics_record = metrics_service.compute(user_input, tokenizer, run_id=current_run_id)
+    except Exception:
         metrics_record = None
 
-    # Compute advanced metrics on the PROMPT text (CDI/SSS/ARQ — natural scale)
-    # Compute advanced metrics on the PROMPT text
     adv_record = None
-    cdi_comp = sss_w = arq_s = None
+    adv_vals = {}
     try:
-        adv_vals = compute_advanced_metrics(user_input)  # dict with keys 'cdi','sss','arq'
-
-        # aggregates for the Run row
-        cdi_comp = float(adv_vals["cdi"]["cdi_composite"])
-        sss_w    = float(adv_vals["sss"]["sss_weighted"])
-        arq_s    = float(adv_vals["arq"]["arq_score"])
-
-        # full flattened row for metrics_advanced
+        adv_vals = compute_advanced_metrics(user_input, ai_pattern_hits=ph)
         adv_record = AdvancedMetricsRecord(
             run_id=current_run_id,
             session_id=st.session_state.session_id,
@@ -173,49 +169,38 @@ def handle_submission(user_input: str):
             cdi_lexical_density=float(adv_vals["cdi"]["lexical_density"]),
             cdi_clauses_per_sentence=float(adv_vals["cdi"]["clauses_per_sentence"]),
             cdi_rate_abstract_terms=float(adv_vals["cdi"]["rate_abstract_terms"]),
-            cdi_composite=cdi_comp,
+            cdi_composite=float(adv_vals["cdi"]["cdi_composite"]),
             sss_n_examples=int(adv_vals["sss"]["n_examples"]),
             sss_n_step_markers=int(adv_vals["sss"]["n_step_markers"]),
             sss_n_formula_markers=int(adv_vals["sss"]["n_formula_markers"]),
             sss_n_hints=int(adv_vals["sss"]["n_hints"]),
-            sss_weighted=sss_w,
+            sss_weighted=float(adv_vals["sss"]["sss_weighted"]),
             arq_abstract_terms=int(adv_vals["arq"]["abstract_terms"]),
             arq_numbers=int(adv_vals["arq"]["numbers"]),
             arq_ratio=float(adv_vals["arq"]["ratio"]),
             arq_meta_bonus=float(adv_vals["arq"]["meta_bonus"]),
-            arq_score=arq_s,
+            arq_score=float(adv_vals["arq"]["arq_score"]),
         )
     except Exception:
         pass
 
-
-    # Build Run record (best-effort)
     try:
-        # --- MAP ANALYZER v2 → legacy fields for Run ---
         sig = (prompt_analysis.get("signals") or {})
         bands = (prompt_analysis.get("qualitative_scores") or {})
         ai_est = (prompt_analysis.get("ai_estimated") or {})
-
-        def _band_to_score(band: Optional[str]) -> Optional[int]:
-            if not band: return None
-            m = {"low": 40, "medium": 70, "high": 90}
-            return m.get(str(band).strip().lower())
 
         clarity_v = _band_to_score(bands.get("clarity_band"))
         specificity_v = _band_to_score(bands.get("specificity_band"))
         structure_v = _band_to_score(bands.get("structure_band"))
 
-        # estimated_* theo schema mới
         est_token_count = sig.get("tokens")
         est_mattr = ai_est.get("mattr_like")
         est_reading = ai_est.get("reading_ease_like")
 
-        # Chuẩn hoá về thang 0..100 nếu model trả 0..1
         if isinstance(est_mattr, (int, float)) and est_mattr <= 1:
-            est_mattr = est_mattr * 100.0
+            est_mattr *= 100.0
         if isinstance(est_reading, (int, float)) and est_reading <= 1:
-            est_reading = est_reading * 100.0
-
+            est_reading *= 100.0
 
         run_record = Run(
             run_id=current_run_id,
@@ -231,89 +216,106 @@ def handle_submission(user_input: str):
             prompt_name="Baseline/Custom",
             solver_model_name="gpt-3.5-turbo",
             response_text=solution_text,
-
-            # 👇 LẤY THEO BẢN MỚI
             clarity_score=clarity_v,
             specificity_score=specificity_v,
             structure_score=structure_v,
             estimated_token_count=est_token_count,
             estimated_mattr_score=est_mattr,
             estimated_reading_ease=est_reading,
-
             analysis_rationale=prompt_analysis.get("overall_evaluation"),
-
-            # nếu bạn đã thêm 3 cột aggregate từ advanced:
-            cdi_composite=cdi_comp,
-            sss_weighted=sss_w,
-            arq_score=arq_s,
-
+            cdi_composite=float(adv_vals.get("cdi", {}).get("cdi_composite", 0)),
+            sss_weighted=float(adv_vals.get("sss", {}).get("sss_weighted", 0)),
+            arq_score=float(adv_vals.get("arq", {}).get("arq_score", 0)),
             latency_ms=solver_response.get("latency_ms", 0),
             tokens_in=(solver_response.get("usage") or {}).get("prompt_tokens", 0),
             tokens_out=(solver_response.get("usage") or {}).get("completion_tokens", 0),
         )
 
+        # AnalyzerScores
+        analyzer_scores = AnalyzerScores(
+            run_id=current_run_id,
+            session_id=st.session_state.session_id,
+            user_id=st.session_state.user_id,
+            prompt_text=user_input,
+            problem_id=problem_id,
+            tokens=int(sig.get("tokens", 0)),
+            sentences=int(sig.get("sentences", 0)),
+            avg_tokens_per_sentence=float(sig.get("avg_tokens_per_sentence", 0)),
+            avg_clauses_per_sentence=float(sig.get("avg_clauses_per_sentence", 0)),
+            cognitive_verbs_count=int(sig.get("cognitive_verbs_count", 0)),
+            abstract_terms_count=int(sig.get("abstract_terms_count", 0)),
+            clarity_score=int(bands.get("clarity_score", 0)),
+            specificity_score=int(bands.get("specificity_score", 0)),
+            structure_score=int(bands.get("structure_score", 0)),
+            mattr_like=float(ai_est.get("mattr_like", 0)),
+            reading_ease_like=float(ai_est.get("reading_ease_like", 0)),
+            cdi_like=float(ai_est.get("cdi_like", 0)),
+            sss_like=float(ai_est.get("sss_like", 0)),
+            arq_like=float(ai_est.get("arq_like", 0)),
+            confidence=str(ai_est.get("confidence", "")),
+        )
 
+        # AnalyzerPattern
+        ph = (prompt_analysis.get("pattern_hits") or {})
+        analyzer_pattern = AnalyzerPattern(
+            run_id=current_run_id,
+            session_id=st.session_state.session_id,
+            user_id=st.session_state.user_id,
+            prompt_text=user_input,
+            problem_id=problem_id,
+            cognitive_terms_ai="|".join(ph.get("cognitive_terms", [])),
+            abstract_terms_ai="|".join(ph.get("abstract_terms", [])),
+            meta_terms_ai="|".join(ph.get("meta_terms", [])),
+            logic_connectors_ai="|".join(ph.get("logic_connectors", [])),
+            modals_ai="|".join(ph.get("modals", [])),
+            step_markers_ai="|".join(ph.get("step_markers", [])),
+            examples_ai="|".join(ph.get("examples", [])),
+            formula_markers_ai="|".join(ph.get("formula_markers", [])),
+            hints_ai="|".join(ph.get("hints", [])),
+            numbers_ai="|".join(ph.get("numbers", [])),
+            sections_ai="|".join(ph.get("sections", [])),
+            output_rules_ai="|".join(ph.get("output_rules", [])),
+        )
+
+        # Metrics Patterns (backend)
+        hits = adv_vals.get("hits", {})
+        backend_pattern = AdvancedMetricsPattern(
+            run_id=current_run_id,
+            session_id=st.session_state.session_id,
+            user_id=st.session_state.user_id,
+            prompt_text=user_input,
+            c_terms_backend="|".join(hits.get("c_terms", [])),
+            a_terms_backend="|".join(hits.get("a_terms", [])),
+            meta_terms_backend="|".join(hits.get("meta_terms", [])),
+            examples_hits="|".join(hits.get("examples", [])),
+            step_markers_hits="|".join(hits.get("step_markers", [])),
+            formula_marks_hits="|".join(hits.get("formula_marks", [])),
+            hints_hits="|".join(hits.get("hints", [])),
+            numbers_hits="|".join(hits.get("numbers", [])),
+            cdi_index=float(adv_vals.get("cdi", {}).get("cdi_composite", 0)),
+            sss_total=int(adv_vals.get("sss", {}).get("n_examples", 0))
+                      + int(adv_vals.get("sss", {}).get("n_step_markers", 0))
+                      + int(adv_vals.get("sss", {}).get("n_formula_markers", 0))
+                      + int(adv_vals.get("sss", {}).get("n_hints", 0)),
+            arq_ratio=float(adv_vals.get("arq", {}).get("ratio", 0)),
+            arq_index=float(adv_vals.get("arq", {}).get("arq_score", 0)),
+        )
+
+        # --- SAVE TO GOOGLE SHEETS ---
         if gsheet_manager:
             if metrics_record:
                 gsheet_manager.append_data("metrics_deterministic", [metrics_record])
             if adv_record:
                 gsheet_manager.append_data("metrics_advanced", [adv_record])
             gsheet_manager.append_data("runs", [run_record])
+            gsheet_manager.append_data("analyzer_scores", [analyzer_scores])
+            gsheet_manager.append_data("analyzer_patterns", [analyzer_pattern])
+            gsheet_manager.append_data("metrics_patterns", [backend_pattern])
         else:
-            st.info("Google Sheets chưa cấu hình, bỏ qua bước ghi log.")
+            st.info("Google Sheets chưa cấu hình, bỏ qua ghi log.")
+
     except Exception as e:
         st.warning(f"Không thể ghi log lên Google Sheets: {e}")
-
-def save_grade_callback(grade, run_id_to_grade, notes):
-    evaluator_name = st.session_state.get("evaluator_name", "Manual").strip() or "Manual"
-    evaluation_record = Evaluation(
-        run_id=run_id_to_grade,
-        grader_id=evaluator_name,
-        correctness_score=(1 if grade == "Correct" else 0),
-        evaluation_notes=notes,
-    )
-    if gsheet_manager:
-        gsheet_manager.append_data("evaluations", [evaluation_record])
-        st.toast(f"Grade '{grade}' saved!")
-    else:
-        st.info("Google Sheets chưa cấu hình, bỏ qua lưu đánh giá.")
-    for msg in st.session_state.chat_history:
-        if msg.get("run_id") == run_id_to_grade and msg.get("role") == "assistant":
-            msg["graded"] = True
-            break
-
-def show_suggestion(for_run_id):
-    used_names = {
-        msg.get("suggestion", {}).get("name")
-        for msg in st.session_state.chat_history
-        if msg.get("suggestion")
-    }
-    unused_keys = [k for k, v in PROMPT_TAXONOMY.items() if v["name"] not in used_names]
-    if not unused_keys:
-        st.warning("All suggestions have been shown!")
-        return
-    random_key = random.choice(unused_keys)
-    suggestion_data = PROMPT_TAXONOMY[random_key]
-    suggestion_record = Suggestion(
-        run_id=for_run_id,
-        session_id=st.session_state.session_id,
-        user_id=st.session_state.user_id,
-        suggestion_key=random_key,
-        suggestion_name=suggestion_data["name"],
-        suggested_level=suggestion_data.get("level", 0),
-        accepted=True,
-    )
-    if gsheet_manager:
-        gsheet_manager.append_data("suggestions", [suggestion_record])
-        st.toast("Suggestion saved!")
-    st.session_state.chat_history.append(
-        {
-            "role": "assistant",
-            "content": "Here is a suggestion for a different prompt structure:",
-            "suggestion": suggestion_data,
-            "run_id": str(uuid.uuid4()),
-        }
-    )
 
 # =========================
 # UI
@@ -322,7 +324,7 @@ init_session_state()
 
 with st.sidebar:
     st.markdown("## Problem Setup")
-    st.text("Version: v4.1.0")
+    st.text("Version: v4.2.0")
     is_disabled = st.session_state.classification_complete
     st.text_input("Your Name / ID", key="evaluator_name", disabled=is_disabled)
     st.radio("Content Domain", CONTENT_DOMAINS, key="content_domain", disabled=is_disabled)
@@ -343,29 +345,35 @@ with st.sidebar:
         disabled=is_disabled,
     )
 
-    DEFAULT_CTX = ["Applied Math", "Theorical Math", "Test"]
-
     st.markdown("---")
-    # Collapsible "Run AI User" as requested
     with st.expander("🤖 Advanced: Run AI User (batch)", expanded=False):
-        # Pull filters from the 'problems' tab (no blocking if not available)
         try:
             _g = get_gsheet_manager()
             _dfopt = _g.get_df("problems") if _g else None
         except Exception:
             _dfopt = None
 
+        DEFAULT_CTX = ["Applied Math", "Theoretical Math", "Test"]
+
         if _dfopt is None or _dfopt.empty:
             st.warning("Không đọc được tab 'problems'.")
-            ccss_opts, level_opts, ctx_opts = [], [], []
+            ccss_opts = CONTENT_DOMAINS
+            level_opts = [str(x) for x in COGNITIVE_LEVELS.keys()]
+            ctx_opts = DEFAULT_CTX
         else:
+            # Tự dò tên cột gần đúng
+            colnames = [c.lower().strip() for c in _dfopt.columns]
+            ctx_col = next((c for c in _dfopt.columns if "abstract" in c.lower() and "real" in c.lower()), None)
+            ctx_vals = set()
+            if ctx_col:
+                ctx_vals = {str(x).strip() for x in _dfopt[ctx_col] if str(x).strip()}
             ccss_opts = sorted({str(x).split("(")[0].strip() for x in _dfopt.get("CCSS", []) if str(x).strip()})
             level_opts = sorted({str(x).strip() for x in _dfopt.get("Level", []) if str(x).strip()})
-            ctx_opts   = sorted({str(x).strip() for x in _dfopt.get("Abstract / Real-World", DEFAULT_CTX) if str(x).strip()})
+            ctx_opts = sorted(ctx_vals) if ctx_vals else DEFAULT_CTX
 
-        ms_ccss  = st.multiselect("Content Domains (để trống = tất cả)", options=ccss_opts)
+        ms_ccss = st.multiselect("Content Domains (để trống = tất cả)", options=ccss_opts)
         ms_level = st.multiselect("Cognitive Levels (để trống = tất cả)", options=level_opts)
-        ms_ctx   = st.multiselect("Problem Contexts (để trống = tất cả)", options=ctx_opts)
+        ms_ctx = st.multiselect("Problem Contexts (để trống = tất cả)", options=ctx_opts)
 
         inc_baseline = st.checkbox("Include baseline", value=True)
         flush_every = st.slider("Flush mỗi N runs", 5, 100, 20, 5)
@@ -384,7 +392,7 @@ with st.sidebar:
                     ccss_filters=ms_ccss,
                     level_filters=ms_level,
                     context_filters=ms_ctx,
-                    evaluator_name=evaluator_name,      # sẽ lưu 'user_id' = "<name> - AI"
+                    evaluator_name=evaluator_name,
                     include_baseline=inc_baseline,
                     analyzer_model="gpt-3.5-turbo",
                     solver_model="gpt-3.5-turbo",
@@ -399,99 +407,6 @@ with st.sidebar:
             st.success(f"AI User đã xử lý {r['selected']} problems, tạo {r['created_runs']} runs.")
 
     st.markdown("---")
+    # st.write("DEBUG analyzer:", json.dumps(prompt_analysis, indent=2))
     if st.button("New Problem / Reset", use_container_width=True, on_click=reset_session):
-        st.rerun()
-
-    with st.expander("🛠 Debug"):
-        try:
-            import openai as _openai_pkg
-            import httpx as _httpx_pkg
-            st.write("OpenAI SDK:", getattr(_openai_pkg, "__version__", "unknown"))
-            st.write("HTTPX:", getattr(_httpx_pkg, "__version__", "unknown"))
-        except Exception:
-            st.write("Cannot inspect versions.")
-        st.write("Setup confirmed:", st.session_state.get("classification_complete"))
-        st.write("Problem text length:", len(st.session_state.get("problem_text", "")))
-        st.write("Google Sheets ready:", gsheet_manager is not None)
-
-# =========================
-# MAIN PANE
-# =========================
-st.markdown("<div style='text-align: center;'><h1>Welcome to PromptOptima</h1></div>", unsafe_allow_html=True)
-
-if not st.session_state.classification_complete:
-    st.info("Please complete the problem setup in the sidebar to begin.")
-    st.stop()
-
-st.markdown("---")
-with st.expander("**Problem Description** (Collapsible)", expanded=not bool(st.session_state.get("problem_text", ""))):
-    st.text_area("Enter the base math problem here.", key="problem_text", height=100)
-
-st.markdown("### Chat History")
-chat_container = st.container(height=500, border=True)
-with chat_container:
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            if msg["role"] == "assistant" and msg.get("prompt_context"):
-                with st.expander("Show Context for this Response"):
-                    st.markdown("**Your Prompt:**")
-                    st.container(border=True).markdown(f"_{msg['prompt_context']}_")
-                    st.markdown("**Your Problem:**")
-                    st.container(border=True).markdown(f"{msg.get('problem_context', 'N/A')}")
-
-            st.markdown(msg["content"])
-
-            if msg.get("suggestion"):
-                s = msg["suggestion"]
-                st.info(f"**Suggestion: {s['name']}**\n\n{s['description']}")
-                with st.expander("Show Structure & Example"):
-                    st.markdown("**📝 Structure / Template**")
-                    st.code(s["template"].replace("{problem_text}", "[Your Problem]"), language="text")
-                    st.markdown("**💡 Example**")
-                    st.code(s["example"], language="text")
-
-            if msg["role"] == "assistant" and msg.get("prompt_analysis"):
-                st.divider()
-                with st.container(border=True):
-                    analysis = msg.get("prompt_analysis", {})
-                    st.markdown("##### 🤖 AI's Prompt Analysis")
-                    st.info(f"**Overall Evaluation:**\n\n_{analysis.get('overall_evaluation', 'N/A')}_")
-                    st.markdown("---")
-
-                    if not msg.get("graded"):
-                        st.markdown("##### ✍️ Your Action: Please Grade The Solution Manually")
-                        grade = st.radio(
-                            "Is the final answer in the solution text correct?",
-                            ("Correct", "Incorrect"),
-                            horizontal=True,
-                            key=f"grade_{msg['run_id']}",
-                        )
-                        notes = st.text_area("Evaluation Notes (Optional)", key=f"notes_{msg['run_id']}")
-                        if st.button("Save Grade", key=f"save_{msg['run_id']}", use_container_width=True):
-                            save_grade_callback(grade, msg["run_id"], notes)
-                            st.rerun()
-                    else:
-                        st.markdown("##### Next Step")
-                        if st.button(
-                            "Suggestion",
-                            key=f"suggestion_{msg['run_id']}",
-                            use_container_width=True,
-                            on_click=show_suggestion,
-                            args=(msg["run_id"],),
-                        ):
-                            st.rerun()
-
-# =========================
-# INPUT AREA
-# =========================
-st.markdown("---")
-col1, col2 = st.columns([1, 5])
-with col1:
-    if st.button("Solve with Default Prompt"):
-        handle_submission(DEFAULT_PROMPT)
-        st.rerun()
-with col2:
-    prompt = st.chat_input("Or enter your custom prompt here...")
-    if prompt:
-        handle_submission(prompt)
         st.rerun()

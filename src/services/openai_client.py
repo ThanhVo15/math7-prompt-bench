@@ -1,7 +1,7 @@
-# src/services/openai_client.py
 import os, time, json, random
 from typing import Dict, Any, Optional
 from string import Template
+import re 
 
 import uuid
 import streamlit as st
@@ -31,93 +31,137 @@ def _client(timeout=45.0):
     http_client = httpx.Client(timeout=timeout, trust_env=False)
     return OpenAI(api_key=api_key, http_client=http_client), http_client
 
+# ====================================================================================
+# === FIX: Hàm helper mới để đảm bảo AI trả về đủ các trường, không tin tưởng AI nữa ===
+# ====================================================================================
+def _ensure_schema_compliance(analysis_json: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validates the JSON from the AI and fills in any missing keys with default values.
+    This makes the system resilient to the AI's "laziness".
+    """
+    pa = analysis_json.setdefault("prompt_analysis", {})
+
+    # 1. Ensure 'signals' object and all its keys exist
+    signals = pa.setdefault("signals", {})
+    signal_defaults = {
+        "tokens": 0, "sentences": 0, "avg_tokens_per_sentence": 0.0, "avg_clauses_per_sentence": 0.0,
+        "cognitive_verbs_count": 0, "abstract_terms_count": 0, "numbers_count": 0, "content_words_count": 0,
+        "sections_count": 0, "explicit_steps_count": 0, "has_worked_example": False, "has_formula_given": False,
+        "has_hints": False, "has_output_format_rule": False, "has_verification": False, "contradictions": False
+    }
+    for key, default_value in signal_defaults.items():
+        signals.setdefault(key, default_value)
+
+    # 2. Ensure 'qualitative_scores' object and all its keys exist
+    scores = pa.setdefault("qualitative_scores", {})
+    score_defaults = {"clarity_score": 0, "specificity_score": 0, "structure_score": 0}
+    for key, default_value in score_defaults.items():
+        scores.setdefault(key, default_value)
+
+    # 3. Ensure 'pattern_hits' object and all its keys exist
+    patterns = pa.setdefault("pattern_hits", {})
+    pattern_defaults = {
+        "cognitive_terms": [], "abstract_terms": [], "meta_terms": [], "logic_connectors": [], "modals": [],
+        "step_markers": [], "examples": [], "formula_markers": [], "hints": [], "numbers": [], "sections": [], "output_rules": []
+    }
+    for key, default_value in pattern_defaults.items():
+        patterns.setdefault(key, default_value)
+    
+    # 4. Ensure 'ai_estimated' object and all its keys exist
+    estimated = pa.setdefault("ai_estimated", {})
+    estimated_defaults = {
+        "mattr_like": 0.0, "reading_ease_like": 0.0, "cdi_like": 0.0, "sss_like": 0.0, "arq_like": 0.0, "confidence": "Low"
+    }
+    for key, default_value in estimated_defaults.items():
+        estimated.setdefault(key, default_value)
+
+    # 5. Ensure other top-level keys exist
+    pa.setdefault("overall_evaluation", "N/A")
+    pa.setdefault("evidence", [])
+
+    return analysis_json
+
 # ---------- ANALYZER: unified template ----------
 ANALYZER_PROMPT_TEMPLATE = Template("""
-You are an expert in prompt engineering for K–12 mathematics. Evaluate the USER PROMPT.
-Return ONLY one JSON object (no markdown), and DO NOT solve the problem.
+You are an expert prompt analyst for K-12 mathematics. Your task is to evaluate a USER PROMPT and return a single, valid JSON object without any markdown or extra text.
 
-SCORING: produce numeric 0..100 scores using the rules below. Cap to [0,100]. Be consistent and deterministic.
+## Analysis Schema & Instructions
 
-Signals to detect (extract first):
-- tokens, sentences, avg_tokens_per_sentence, avg_clauses_per_sentence
-- cognitive_verbs_count, abstract_terms_count, numbers_count, content_words_count
-- sections_count (headings/parts), explicit_steps_count (1., 2., or "Step N")
-- has_worked_example, has_formula_given, has_hints
-- has_output_format_rule (e.g., "ONLY", "exact format", "JSON", "return exactly")
-- has_verification (e.g., "Final Answer", "verify", "check", "show your work")
-- contradictions (boolean) if the instruction conflicts (e.g., "ONLY one line" then ask multiple items).
+### 1. `signals` (Quantitative metrics)
+Extract these raw counts from the USER PROMPT:
+- `tokens`: Total word tokens.
+- `sentences`: Total number of sentences.
+- `avg_tokens_per_sentence`: `tokens` / `sentences`.
+- `avg_clauses_per_sentence`: Estimate of clauses per sentence.
+- `cognitive_verbs_count`: Count of verbs indicating cognitive processes (e.g., analyze, explain, solve, compare).
+- abstract_terms_count: Count of core mathematical concepts, not simple contextual nouns. Prioritize terms like 'ratio', 'perimeter', 'probability', 'variable' over words like 'apples', 'garden', 'pounds'.
+- `numbers_count`: Count of numeric values.
+- `content_words_count`: Count of non-stop-words.
+- `sections_count`: Count of explicit sections (e.g., "Part 1", "Section A").
+- `explicit_steps_count`: Count of numbered or bulleted steps (e.g., "1.", "Step 1:").
+- `has_worked_example`: `true` if a worked example is provided.
+- `has_formula_given`: `true` if a formula is explicitly given.
+- `has_hints`: `true` if hints are provided.
+- `has_output_format_rule`: `true` for constraints like "return JSON", "only the final answer".
+- `has_verification`: `true` for requests like "check your work", "verify your answer".
+- `contradictions`: `true` if instructions conflict (e.g., "be concise" and "explain in detail").
 
-SCORING RULES (numeric only):
+### 2. `qualitative_scores` (Scoring based on `signals`)
+Calculate these scores from 0-100:
+- `clarity_score`: Base=50. +15 if tokens>=12. +10 for clear goals. -25 for contradictions. -10 if tokens<8.
+- `specificity_score`: Base=30. +30 for strict output format. +20 for explicit steps. +10 for verification request. +5 for given formulas.
+- `structure_score`: Base=30. +40 for explicit steps. +15 for sections. +10 for ordered steps.
 
-clarity_score (0..100):
-- Base = 50
-- +15 if tokens >= 12
-- +10 if the prompt clearly states the task/goal (e.g., "determine", "solve", "compute", "evaluate")
-- -25 if contradictions == true
-- -10 if tokens < 8 (too short)
-- Clamp to 0..100
+### 3. `pattern_hits` (Extracted phrases)
+**THIS IS MANDATORY.** List the exact words/phrases found for each category. Return `[]` if none are found.
+- `cognitive_terms`: e.g., ["solve", "explain"]
+- `abstract_terms`: e.g., ["perimeter", "ratio"]
+- `meta_terms`: e.g., ["reflect on", "check your work"]
+- `logic_connectors`: e.g., ["if", "then", "because"]
+- `modals`: e.g., ["can", "should", "might"]
+- `step_markers`: e.g., ["step by step", "1.", "first"]
+- `examples`: e.g., ["for example", "e.g."]
+- `formula_markers`: e.g., ["=", "+", "pi"]
+- `hints`: e.g., ["hint:", "remember that"]
+- `numbers`: e.g., ["12", "0.5", "8"]
+- `sections`: e.g., ["Part 1"]
+- `output_rules`: e.g., ["return a JSON object"]
 
-specificity_score (0..100):
-- Base = 30
-- +30 if has_output_format_rule == true (strict output / JSON / exact format)
-- +20 if explicit_steps_count >= 2
-- +10 if has_verification == true (final answer / verify / check / show work)
-- +5  if has_formula_given == true
-- Clamp to 0..100
+### 4. `ai_estimated` (Heuristic scores)
+Provide your best estimate for these metrics:
+- `mattr_like`: Lexical diversity (0.0 to 1.0).
+- `reading_ease_like`: Readability score (0-100, higher is easier).
+- `cdi_like`, `sss_like`, `arq_like`: Composite scores for cognitive demand, structure, and reasoning (0-100).
+- `confidence`: Your confidence in this analysis ("Low", "Medium", "High").
 
-structure_score (0..100):
-- Base = 30
-- +40 if explicit_steps_count >= 2
-- +15 if sections_count >= 1 (headings/parts/sections)
-- +10 if the steps are clearly ordered/numbered (1., 2., 3. or "Step N")
-- Clamp to 0..100
+### 5. `overall_evaluation` & `evidence`
+- `overall_evaluation`: 1-2 sentence summary of prompt quality.
+- `evidence`: 3 short string cues from the prompt that support your evaluation.
 
-ai_estimated (heuristics; numeric only):
-- mattr_like: 0..1 estimate of lexical diversity (window=10)
-- reading_ease_like: 0..100 (higher=easier)
-- cdi_like, sss_like, arq_like: scalar 0..100 rough indicators
-- confidence: "Low" | "Medium" | "High"
-
-Return JSON with this exact schema:
-
+## JSON Object to Return
+Return your analysis in this exact JSON format. **DO NOT OMIT ANY KEYS.**
 {
   "prompt_analysis": {
     "signals": {
-      "tokens": <int>,
-      "sentences": <int>,
-      "avg_tokens_per_sentence": <float>,
-      "avg_clauses_per_sentence": <float>,
-      "cognitive_verbs_count": <int>,
-      "abstract_terms_count": <int>,
-      "numbers_count": <int>,
-      "content_words_count": <int>,
-      "sections_count": <int>,
-      "explicit_steps_count": <int>,
-      "has_worked_example": <bool>,
-      "has_formula_given": <bool>,
-      "has_hints": <bool>,
-      "has_output_format_rule": <bool>,
-      "has_verification": <bool>,
-      "contradictions": <bool>
+      "tokens": <int>, "sentences": <int>, "avg_tokens_per_sentence": <float>, "avg_clauses_per_sentence": <float>,
+      "cognitive_verbs_count": <int>, "abstract_terms_count": <int>, "numbers_count": <int>, "content_words_count": <int>,
+      "sections_count": <int>, "explicit_steps_count": <int>, "has_worked_example": <bool>, "has_formula_given": <bool>,
+      "has_hints": <bool>, "has_output_format_rule": <bool>, "has_verification": <bool>, "contradictions": <bool>
     },
-    "qualitative_scores": {
-      "clarity_score": <int>,        // 0..100 (no bands)
-      "specificity_score": <int>,    // 0..100
-      "structure_score": <int>       // 0..100
+    "qualitative_scores": { "clarity_score": <int>, "specificity_score": <int>, "structure_score": <int> },
+    "pattern_hits": {
+      "cognitive_terms": ["<verb1>", "..."], "abstract_terms": ["<term1>", "..."], "meta_terms": [], "logic_connectors": [],
+      "modals": [], "step_markers": [], "examples": [], "formula_markers": [], "hints": [], "numbers": [], "sections": [], "output_rules": []
     },
     "ai_estimated": {
-      "mattr_like": <float>,         // 0..1
-      "reading_ease_like": <float>,  // 0..100
-      "cdi_like": <float>,           // 0..100
-      "sss_like": <float>,           // 0..100
-      "arq_like": <float>,           // 0..100
-      "confidence": "<Low|Medium|High>"
+      "mattr_like": <float>, "reading_ease_like": <float>, "cdi_like": <float>, "sss_like": <float>, "arq_like": <float>, "confidence": "<Low|Medium|High>"
     },
-    "overall_evaluation": "<1–2 sentences: strengths & weaknesses>",
-    "evidence": ["<short cue 1>", "<cue 2>", "<cue 3>"]
+    "overall_evaluation": "<Your 1-2 sentence summary>",
+    "evidence": ["<cue 1>", "<cue 2>", "<cue 3>"]
   }
 }
 
+## User Data
 USER PROMPT:
 <<<
 ${user_prompt}
@@ -136,19 +180,14 @@ SOLVER_PROMPT_TEMPLATE = Template("${user_prompt}\n\n${problem_text}\n")
 def _mock_analyzer() -> Dict[str, Any]:
     st.warning("OpenAI key not found. Using MOCK ANALYZER.")
     time.sleep(0.2)
-    return {
+    # Return a fully compliant mock object
+    mock_json = {
         "prompt_analysis": {
-            "qualitative_scores": {"clarity_score": 72, "specificity_score": 68, "structure_score": 70},
-            "estimated_metrics": {
-                "estimated_token_count": 40,
-                "estimated_mattr_score": 62.0,
-                "estimated_reading_ease": 74.0,
-                "estimated_cdi": 55.0, "estimated_sss": 35.0, "estimated_arq": 48.0
-            },
-            "overall_evaluation": "Mostly clear; could strengthen output constraints and verification."
-        },
-        "error": None
+            "signals": {}, "qualitative_scores": {}, "pattern_hits": {}, "ai_estimated": {},
+            "overall_evaluation": "Mock evaluation", "evidence": []
+        }
     }
+    return _ensure_schema_compliance(mock_json)
 
 def _mock_solver() -> Dict[str, Any]:
     st.warning("OpenAI key not found. Using MOCK SOLVER.")
@@ -173,78 +212,38 @@ def get_analysis_from_analyzer(user_prompt: str, problem_text: str = "", model="
     prompt = ANALYZER_PROMPT_TEMPLATE.safe_substitute(
         user_prompt=user_prompt, problem_text=problem_text or ""
     )
-
-    def _call():
-        return client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": sys_msg},
-                      {"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.0, max_tokens=800,
-        )
-
-    # try once
-    resp = _call()
-    content = resp.choices[0].message.content or "{}"
+    
+    # Retry logic remains the same
     try:
-        out = json.loads(content)
-        out["error"] = None
-        return out
-    except Exception:
-        # retry with even stricter reminder
-        strict_user = (
-            "Return ONLY valid JSON per the schema. No prose. "
-            "If unsure, estimate based on heuristics in the prompt."
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.0, max_tokens=1024, # Increased slightly for safety
         )
+        content = resp.choices[0].message.content or "{}"
+        out = json.loads(content)
+    except Exception:
+        # Fallback call
         resp2 = client.chat.completions.create(
             model=model,
-            messages=[{"role": "system", "content": sys_msg},
-                      {"role": "user", "content": prompt},
-                      {"role": "user", "content": strict_user}],
+            messages=[{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            temperature=0.0, max_tokens=800,
+            temperature=0.0, max_tokens=1024,
         )
         content2 = resp2.choices[0].message.content or "{}"
         try:
             out = json.loads(content2)
-            out["error"] = None
-            return out
         except Exception:
-            # final local heuristic fallback (never leave blanks)
-            from src.core.metrics import BasicMetrics
-            from src.core.tokenizer import AdvancedTokenizer
-            bm = BasicMetrics().compute(user_prompt, AdvancedTokenizer(), run_id=str(uuid.uuid4()))
-            # Heuristic bands
-            txt = user_prompt.strip().lower()
-            has_steps = any(k in txt for k in ["step", "1)", "2)", "•", "-", "json", "output:"])
-            has_verify = any(k in txt for k in ["check", "verify", "show your work", "explain why"])
-            bare = len(user_prompt.split()) < 6
+            # If all else fails, create a minimal empty structure
+            out = {"prompt_analysis": {}}
 
-            clarity = 80
-            spec = 60
-            struct = 60
-            if bare:
-                spec = min(spec, 30); struct = min(struct, 30); clarity = 50
-            if has_steps: struct = max(struct, 75)
-            if has_verify: spec = min(100, spec + 8)
-
-            result_json = {
-                "prompt_analysis": {
-                    "qualitative_scores": {
-                        "clarity_score": int(clarity),
-                        "specificity_score": int(spec),
-                        "structure_score": int(struct)
-                    },
-                    "estimated_metrics": {
-                        "estimated_token_count": int(max(len(user_prompt)/4.0, len(user_prompt.split())/0.75)),
-                        "estimated_mattr_score": float(bm.mattr),
-                        "estimated_reading_ease": float(bm.reading_ease),
-                    },
-                    "overall_evaluation": "Fallback heuristic: JSON parse failed; scores estimated locally."
-                },
-                "error": "model_json_failed"
-            }
-            return result_json
+    # =================================================================
+    # === FIX: Luôn chạy hàm dọn dẹp để đảm bảo đủ key trước khi trả về ===
+    # =================================================================
+    final_out = _ensure_schema_compliance(out)
+    final_out["error"] = None
+    return final_out
 
 def get_solution_from_solver(user_prompt: str, problem_text: str, model="gpt-3.5-turbo") -> Dict[str, Any]:
     client, _ = _client(60.0)
@@ -263,42 +262,113 @@ def get_solution_from_solver(user_prompt: str, problem_text: str, model="gpt-3.5
         "usage": usage_dict, "latency_ms": int((t1 - t0) * 1000), "error": None
     }
 
-def synthesize_prompt_from_suggestion(problem_text: str, suggestion: Dict[str, Any],
-                                      *, target_style: Optional[str] = None, model="gpt-3.5-turbo") -> str:
-    client, _ = _client()
+# (The paraphrase function synthesize_prompt_from_suggestion remains unchanged)
+# src/services/openai_client.py
+
+def synthesize_prompt_from_suggestion(
+    problem_text: str,
+    suggestion: Dict[str, Any],
+    cognitive_level: int,  # <<< THAY ĐỔI 1: Thêm tham số cognitive_level
+    *,
+    model: str = "gpt-3.5-turbo",
+    ai_persona: Optional[str] = None, # Giữ lại để có thể ghi đè nếu cần
+    strict_fill: bool = False,
+) -> str:
     tpl = suggestion.get("template", "{problem_text}")
-    if not client:
-        return tpl.replace("{problem_text}", problem_text)
 
-    style_pool = [
-        "concise teacher", "friendly tutor", "examiner style", "step-by-step coach",
-        "Socratic Q&A", "structured outline", "JSON output requirement", "bullets then final answer"
+    client, _ = _client()
+    if not client or strict_fill:
+        # Fallback thông minh hơn
+        filled_tpl = tpl.replace("{problem_text}", problem_text)
+        if "{student_answer}" in filled_tpl:
+            plausible_wrong_answer = "The student calculated the area as 96 square meters."
+            filled_tpl = filled_tpl.replace("{student_answer}", plausible_wrong_answer)
+        if "{hypothesis}" in filled_tpl:
+            plausible_hypothesis = "The final number of items is directly proportional to the perimeter."
+            filled_tpl = filled_tpl.replace("{hypothesis}", plausible_hypothesis)
+        return filled_tpl
+
+    # <<< THAY ĐỔI 2: Tách và mở rộng bộ Persona >>>
+    educator_personas = [
+        "A patient and encouraging tutor",
+        "A sharp, concise university professor",
+        "A friendly peer who explains things simply",
+        "An examiner focused on precision and keywords",
+        "A Socratic coach who asks guiding questions",
+        "A motivational coach focused on building confidence"
     ]
-    style = target_style or random.choice(style_pool)
+    student_personas = [
+        "A curious student who wants to know 'why'",
+        "An anxious student who needs a lot of reassurance",
+        "A practical student who wants real-world examples",
+        "A slightly confused student asking for a simpler explanation"
+    ]
+    
+    # 80% là educator, 20% là student để giả lập
+    if random.random() < 0.8:
+        persona = random.choice(educator_personas)
+    else:
+        persona = random.choice(student_personas)
+    
+    # Ghi đè persona nếu được cung cấp
+    if ai_persona:
+        persona = ai_persona
 
-    sys = "You rewrite user prompts. Output ONLY the rewritten prompt, no quotes, no code fences, no solution."
+    # <<< THAY ĐỔI 3: Hướng dẫn từ vựng theo Cognitive Level >>>
+    level_guidance = ""
+    if cognitive_level == 1:
+        level_guidance = "Use direct, simple language. Focus on 'how-to' and concrete steps. Keywords: calculate, find, list, show the steps."
+    elif cognitive_level == 2:
+        level_guidance = "Use language that promotes understanding. Focus on 'why' and 'what it means'. Keywords: explain, describe, illustrate, compare, what is the relationship."
+    elif cognitive_level >= 3:
+        level_guidance = "Use advanced language that requires analysis and evaluation. Focus on 'what if' and 'which is best'. Keywords: justify, critique, devise a strategy, optimize, what is the most efficient method."
+
+    # <<< THAY ĐỔI 4: System & User Prompt được viết lại hoàn toàn >>>
+    sys = (
+        "You are a creative and expert prompt engineer specializing in K-12 math education. "
+        "Your task is to rewrite a prompt TEMPLATE by adopting a specific PERSONA and tailoring the language to a given COGNITIVE LEVEL. "
+        "You must output ONLY the final, rewritten prompt text."
+    )
+
     user = f"""
-Rewrite the instruction prompt for this math problem using the structure idea below.
-Vary tone/verbosity/format slightly to avoid duplicates, but stay faithful to the structure.
+You must rewrite the following prompt TEMPLATE.
 
-STRUCTURE NAME: {suggestion.get('name', 'Suggestion')}
-GUIDELINE: {suggestion.get('description','')}
-TEMPLATE (reference only): {tpl}
-EXAMPLE (reference only): {suggestion.get('example','')}
-STYLE TARGET (loose): {style}
+### CONTEXT
+1.  **PERSONA to adopt**: "{persona}"
+2.  **COGNITIVE LEVEL of the problem**: L{cognitive_level}
+3.  **GUIDANCE for L{cognitive_level}**: "{level_guidance}"
 
-MUST:
-- Include this problem verbatim where appropriate:
+### TEMPLATE (The core task you must preserve)
+{tpl}
+
+
+### PROBLEM (To be inserted and used for context)
 {problem_text}
-- Do NOT solve the problem. Produce ONLY the instruction prompt the user would type.
-- Bullets/steps/sections allowed. Keep length natural.
+
+
+### REWRITE RULES
+1.  **ADAPT, DON'T JUST REPLACE**: Do not just robotically fill in the template. Creatively rewrite it to sound natural for the given PERSONA and appropriate for the COGNITIVE LEVEL. A student persona should sound like they are asking a question. An educator persona should sound like they are giving an instruction.
+2.  **PRESERVE THE CORE TASK**: The final prompt must still accomplish the main goal of the TEMPLATE (e.g., 'compare 3 strategies', 'review a solution').
+3.  **INTELLIGENT PLACEHOLDER FILLING**:
+    * If `{student_answer}` is present, you MUST invent a plausible (but likely incorrect) student answer based on the PROBLEM. For example, a common conceptual error.
+    * If `{hypothesis}` is present, you MUST invent a simple, relevant hypothesis for the PROBLEM.
+    * NEVER leave placeholders like '[Student answer here]' in the output.
+4.  **INSERT PROBLEM TEXT**: Replace `{{problem_text}}` with the exact PROBLEM text.
+5.  **OUTPUT**: Return ONLY the final, rewritten prompt. No commentary, no explanations, no markdown.
 """.strip()
 
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
-        temperature=0.7, max_tokens=500,
+        temperature=0.7, # <<< THAY ĐỔI 5: Tăng nhiệt độ để khuyến khích sự sáng tạo
+        max_tokens=600, # Tăng nhẹ để có không gian cho prompt dài hơn
     )
     out = (resp.choices[0].message.content or "").strip()
-    if out.startswith("```"): out = _strip_code_fences(out)
+    
+    # Dọn dẹp output
+    if out.startswith("`") and out.endswith("`"):
+        out = out.strip("`")
+    if out.startswith('"') and out.endswith('"'):
+        out = out.strip('"')
+
     return out

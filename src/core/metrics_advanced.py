@@ -1,164 +1,307 @@
+# src/core/metrics_advanced.py
+
+from __future__ import annotations
 import re
-from typing import Dict, List
+import math
+from typing import Dict, List, Tuple, Optional, Set
 
-# ==============================================================================
-# PHẦN 1: CÁC BỘ TỪ KHÓA ĐƠN GIẢN (CÓ THỂ MỞ RỘNG)
-# ==============================================================================
-# Nhóm 1: Các từ khóa yêu cầu tư duy bậc cao (Expanded)
-COGNITIVE_KEYWORDS = {
-    'analyze', 'compare', 'contrast', 'classify', 'organize', 'justify', 'evaluate',
-    'critique', 'why is', 'how does', 'hypothesize', 'design', 'synthesize', 'differentiate',
-    'deduce', 'infer', 'interpret', 'construct', 'devise', 'defend', 'validate',
-    'what is the difference', 'explain the reason', 'argue for', 'argue against'
+
+# ---------------- Lexicons (V2 – expanded and cleaned) ----------------
+# DEBUG: Đã loại bỏ các từ khóa bị trùng lặp từ các bộ lexicon.
+COGNITIVE_VERBS: Set[str] = {
+    # Analyze / Understand / Apply
+    "analyze", "analyze why", "analyze how", "break down", "diagnose",
+    "classify", "categorize", "organize", "structure", "outline", "summarize", "synthesize",
+    "explain", "explain why", "explain how", "illustrate", "demonstrate", "show that",
+    "derive", "compute", "calculate", "solve", "determine", "evaluate", "estimate", "approximate",
+    "simplify", "expand", "factor", "generalize", "specialize", "transform", "translate",
+    "apply", "use", "implement", "simulate", "model", "design", "plan",
+    # Compare / Critique / Argue
+    "compare", "contrast", "differentiate", "distinguish", "relate", "map", "align",
+    "justify", "defend", "argue", "debate", "critique", "assess", "appraise", "review",
+    "validate", "verify", "check", "confirm", "prove", "disprove", "falsify", "refute",
+    "predict", "hypothesize", "conjecture", "infer", "deduce", "induce",
+    # Strategy & meta-actions
+    "choose", "select", "prioritize", "optimize", "trade off", "reason", "reason about",
+    "formulate", "reformulate", "compose", "decompose", "reconstruct", "reframe",
+    "propose", "suggest", "identify", "pinpoint", "provide",
 }
 
-# Nhóm 2: Các thuật ngữ trừu tượng chính (Expanded for 7th Grade Math)
-ABSTRACT_KEYWORDS = {
-    'relationship', 'proportional', 'ratio', 'rate', 'probability', 'equation',
-    'expression', 'variable', 'inequality', 'similarity', 'congruence', 'efficiency',
-    'strategy', 'sample', 'population', 'integer', 'decimal', 'fraction', 'percentage',
-    'circumference', 'diameter', 'radius', 'volume', 'surface area', 'mean', 'median',
-    'mode', 'range', 'outcome', 'data set', 'distribution'
+ABSTRACT_TERMS: Set[str] = {
+    # General math/abstract
+    "abstraction", "structure", "pattern", "rule", "property", "invariant", "constraint",
+    "variable", "parameter", "constant", "function", "mapping", "relation", "set", "subset",
+    "domain", "range", "input", "output", "model", "system", "theoretical", "assumption", "axiom",
+    # Arithmetic/number
+    "integer", "whole number", "natural number", "rational", "irrational", "real number",
+    "prime", "composite", "factor", "multiple", "divisor", "gcd", "lcm", "remainder",
+    "ratio", "unit rate", "rate", "proportion", "proportionality", "percentage", "percent",
+    "fraction", "numerator", "denominator", "decimal", "place value",
+    # Expressions & equations (EE)
+    "term", "expression", "equation", "identity", "inequality", "formula", "coefficient",
+    "variable term", "constant term", "like terms", "distribution", "distributive property",
+    "commutative property", "associative property", "linear", "nonlinear", "quadratic",
+    "polynomial", "exponent", "power", "base", "evaluate expression", "substitution",
+    "solution set", "equivalent", "system of equations", "elimination", "substitution method",
+    "graphical solution", "factorization",
+    # Geometry (G)
+    "point", "line", "ray", "segment", "angle", "right angle", "acute angle", "obtuse angle",
+    "parallel", "perpendicular", "intersect", "triangle", "isosceles", "scalene", "equilateral",
+    "quadrilateral", "rectangle", "square", "rhombus", "parallelogram", "trapezoid",
+    "polygon", "circle", "arc", "chord", "tangent", "secant", "radius", "diameter", "circumference",
+    "area", "perimeter", "surface area", "volume", "prism", "pyramid", "cylinder", "cone", "sphere",
+    "similarity", "congruence", "scale factor", "dilation", "rotation", "reflection", "translation",
+    # Ratios & Proportional Relationships (RP)
+    "unit price", "constant of proportionality", "direct variation",
+    "proportional relationship", "table of values", "double number line",
+    # Coordinate / functions
+    "coordinate plane", "axis", "x-axis", "y-axis", "origin", "ordered pair", "slope",
+    "intercept", "slope-intercept form", "graph", "curve", "table", "sequence",
+    "arithmetic sequence", "geometric sequence", "nth term", "recurrence",
+    # Statistics & Probability (SP)
+    "data set", "distribution", "sample", "population", "bias", "random", "experiment", "trial",
+    "event", "outcome", "likelihood", "odds", "probability", "theoretical probability",
+    "experimental probability", "independent events", "dependent events", "conditional probability",
+    "relative frequency", "mean", "median", "mode", "range", "quartile", "interquartile range",
+    "percentile", "variance", "standard deviation", "box plot", "histogram", "dot plot", "bar chart",
+    "scatter plot", "correlation", "trend line", "regression", "residual",
+    # Reasoning & new terms from analysis
+    "equivalence", "implication", "contradiction", "counterexample", "generalization", "edge case",
+    "efficiency", "strategy", "tradeoff", "optimal", "feasible", "constraint satisfaction",
+    "reasoning", "approach", "method", "solution", "scenario", "concept", "principle",
+    "applicability", "validity", "strengths", "weaknesses", "errors", "misunderstanding", "improvement",
 }
 
-# Nhóm 3: Các từ khóa hỗ trợ, tạo cấu trúc (Expanded)
-SCAFFOLDING_KEYWORDS = {
-    'step-by-step', 'step 1', 'step 2', 'first', 'second', 'third', 'fourth', 'finally',
-    'example', 'e.g.', 'for instance', 'let\'s say', 'given that', 'assuming',
-    'hint', 'note', 'remember', 'formula', 'definition', 'recall', 'in conclusion'
+METACOGNITIVE_VERBS: Set[str] = {
+    # Meta-level actions (self-monitoring, evaluation of process)
+    "justify", "explain", "compare", "evaluate", "critique", "argue", "reflect", "assess",
+    "self-check", "check your work", "verify reasoning", "validate reasoning",
+    "explain reasoning", "explain decision", "explain choice", "explain steps",
+    "review", "revise", "debug", "analyze error", "error analysis", "sanity check", "self-assess",
 }
 
-# (Các bộ từ điển cũ vẫn được giữ lại để tương thích nếu cần)
-COGNITIVE_VERBS = COGNITIVE_KEYWORDS.union({'explain', 'verify', 'predict', 'select', 'choose', 'formulate', 'decompose'})
-ABSTRACT_TERMS = ABSTRACT_KEYWORDS.union({'proportionality', 'equivalence', 'variability', 'coefficient', 'hypothesis'})
-METACOGNITIVE_VERBS = {"justify", "explain", "compare", "evaluate", "critique", "argue"}
-STOPWORDS = {"the","a","an","and","or","of","to","in","on","for","with","by","from","this","that","these","those","is","are","was","were","be","as","at","it","you","your","i","we","they","he","she","their","our","his","her","them"}
+LOGIC_CONNECTORS: Set[str] = {
+    "if", "then", "if and only if", "iff", "therefore", "hence", "thus", "so", "because", "since",
+    "as a result", "consequently", "accordingly", "it follows that", "implies",
+    "this implies", "we conclude", "we can conclude", "by contradiction", "by induction",
+    "suppose", "assume", "given", "given that", "provided that", "unless", "otherwise", "in that case",
+    "consider", "let", "let x be", "let n be", "for any", "for all", "there exists",
+    "either", "or", "neither", "nor", "both", "case", "case 1", "case 2", "case analysis",
+    "approximately", "about", "roughly", "at least", "at most", "no more than", "no less than",
+    "however", "nevertheless", "nonetheless", "on the other hand", "in contrast", "meanwhile",
+}
+
+MODALS: Set[str] = {
+    "can", "cannot", "can not", "could", "could not", "might", "may", "must", "must not",
+    "should", "should not", "would", "would not", "will", "will not", "shall", "ought to",
+    "likely", "unlikely", "possibly", "probably", "certainly", "surely",
+}
+
+STOPWORDS: Set[str] = {
+    "a", "an", "the", "and", "but", "or", "nor", "so", "for", "yet", "about", "above", "after",
+    "again", "against", "all", "am", "any", "are", "aren't", "as", "at", "be", "because",
+    "been", "before", "being", "below", "between", "both", "by", "could", "couldn't", "did",
+    "didn't", "do", "does", "doesn't", "doing", "don't", "down", "during", "each", "few",
+    "from", "further", "had", "hadn't", "has", "hasn't", "have", "haven't", "having", "he",
+    "he'd", "he'll", "he's", "her", "here", "here's", "hers", "herself", "him", "himself",
+    "his", "how", "how's", "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is",
+    "isn't", "it", "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", "my",
+    "myself", "no", "not", "of", "off", "on", "once", "only", "other", "ought", "our",
+    "ours", "ourselves", "out", "over", "own", "same", "she", "she'd", "she'll", "she's",
+    "should", "shouldn't", "some", "such", "than", "that", "that's", "their", "theirs",
+    "them", "themselves", "then", "there", "there's", "these", "they", "they'd", "they'll",
+    "they're", "they've", "this", "those", "through", "to", "too", "under", "until", "up",
+    "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were", "weren't",
+    "what", "what's", "when", "when's", "where", "where's", "which", "while", "who", "who's",
+    "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll",
+    "you're", "you've", "your", "yours", "yourself", "yourselves",
+}
+
+WORD_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ']+")
+NUM_RE  = re.compile(r"\b\d+(?:\.\d+)?\b")
+SENT_SPLIT_RE = re.compile(r"[.!?…]+")
+
+CLAUSE_BOUNDARY_RE = re.compile(
+    r"(,|;|:|\bthat\b|\bwhich\b|\bbecause\b|\bif\b|\bwhen\b|\bwhile\b|\bwhereas\b|\balthough\b|\bsince\b)",
+    re.IGNORECASE
+)
+
+FORMULA_BASE = r"[=^±%×÷+*/≤≥]"
+HYPHEN_BETWEEN = r"(?:(?<=\w)-(?=\w)|(?<=\d)-(?=\d))"
+FORMULA_MARK_RE = re.compile(fr"(?:{FORMULA_BASE}|{HYPHEN_BETWEEN}|\bpi\b|π)", re.IGNORECASE)
+
+EXAMPLE_RE = re.compile(r"\bexample\b|\be\.g\.\b|\bfor example\b", re.IGNORECASE)
+HINT_RE = re.compile(r"\bhint\b|\bremember\b|\bnote\b|\bdefinition\b|\brecall\b", re.IGNORECASE)
+STEP_LINE_RE = re.compile(r"(?m)^\s*(?:\d+[\.\)]\s+|\-\s+|\*\s+|step\s*\d+)", re.IGNORECASE)
+STEP_INLINE_RE = re.compile(r"\b(first|second|third|fourth|fifth)\b", re.IGNORECASE)
+STEP_PHRASE_RE = re.compile(r"\bstep[-\s]?by[-\s]?step\b", re.IGNORECASE)
+SECTION_HEADER_RE = re.compile(r"(?m)^\s*(?:part|section|thread|student|approach)\s*[A-Z\d]+[:\.\)]", re.IGNORECASE)
 
 
-
-# (Các bộ từ điển cũ vẫn được giữ lại để tương thích nếu cần)
-COGNITIVE_VERBS = COGNITIVE_KEYWORDS.union({'explain', 'verify', 'validate', 'predict', 'select', 'choose', 'formulate', 'decompose'})
-ABSTRACT_TERMS = ABSTRACT_KEYWORDS.union({'proportionality', 'equivalence', 'variability', 'distribution', 'coefficient', 'hypothesis'})
-METACOGNITIVE_VERBS = {"justify", "explain", "compare", "evaluate", "critique", "argue"}
-STOPWORDS = {"the","a","an","and","or","of","to","in","on","for","with","by","from","this","that","these","those","is","are","was","were","be","as","at","it","you","your","i","we","they","he","she","their","our","his","her","them"}
-
-
-# ==============================================================================
-# PHẦN 2: LOGIC CỐT LÕI MỚI - ĐẾM VÀ CHUẨN HÓA
-# ==============================================================================
-
-def _compute_normalized_rates(prompt_text: str) -> Dict:
-    lower_prompt = prompt_text.lower()
-    tokens = [w.lower() for w in re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ']+", prompt_text)]
-    total_words = len(tokens)
-
-    if total_words == 0:
-        return {
-            "cognitive_rate": 0.0,
-            "abstract_rate": 0.0,
-            "scaffolding_rate": 0.0,
-            "total_words": 0
-        }
-
-    # Đếm số lượng từ khóa trong mỗi nhóm
-    cognitive_count = sum(1 for keyword in COGNITIVE_KEYWORDS if keyword in lower_prompt)
-    abstract_count = sum(1 for keyword in ABSTRACT_KEYWORDS if keyword in lower_prompt)
-    scaffolding_count = sum(1 for keyword in SCAFFOLDING_KEYWORDS if keyword in lower_prompt)
-
-    # Chuẩn hóa bằng cách chia cho tổng số từ
-    return {
-        "cognitive_rate": cognitive_count / total_words,
-        "abstract_rate": abstract_count / total_words,
-        "scaffolding_rate": scaffolding_count / total_words,
-        "total_words": total_words
-    }
-
-# --- Các hàm helper cũ vẫn được giữ lại ---
-def _lower_words(text: str) -> List[str]:
-    return [w.lower() for w in re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ']+", text)]
+# ---------------- Helpers ----------------
+def _words(text: str) -> List[str]:
+    return [w.lower() for w in WORD_RE.findall(text)]
 
 def _numbers(text: str) -> List[str]:
-    return re.findall(r"\b\d+(?:\.\d+)?\b", text)
+    return NUM_RE.findall(text)
 
 def _lexical_density(tokens: List[str]) -> float:
-    if not tokens: return 0.0
-    content = [t for t in tokens if t not in STOPWORDS]
-    return len(content) / len(tokens)
+    if not tokens:
+        return 0.0
+    content_words = [t for t in tokens if t not in STOPWORDS]
+    return len(content_words) / len(tokens) if tokens else 0.0
 
 def _clauses_per_sentence(text: str) -> float:
-    sents = [p.strip() for p in re.split(r"[.!?…]+", text) if p.strip()]
-    if not sents: return 0.0
-    clause_re = re.compile(r"(,|;|:|\bthat\b|\bwhich\b|\bbecause\b|\bif\b|\bwhen\b|\bwhile\b|\bwhereas\b|\balthough\b|\bsince\b)", re.IGNORECASE)
-    counts = [1 + len(clause_re.findall(s)) for s in sents]
-    return sum(counts) / len(sents)
+    sents = [s.strip() for s in SENT_SPLIT_RE.split(text) if s.strip()]
+    if not sents:
+        return 0.0
+    clause_counts = [1 + len(CLAUSE_BOUNDARY_RE.findall(s)) for s in sents]
+    return sum(clause_counts) / len(sents)
 
+def _count_terms_and_hits(text_lower: str, terms: Set[str]) -> Tuple[int, List[str]]:
+    cnt = 0
+    hits: List[str] = []
+    for term in terms:
+        # term is already lowercased from the set
+        if " " in term:
+            k = text_lower.count(term)
+            if k > 0:
+                cnt += k
+                hits.extend([term] * k)
+        else:
+            found = re.findall(rf"\b{re.escape(term)}\b", text_lower)
+            if found:
+                cnt += len(found)
+                hits.extend(found)
+    return cnt, hits
+
+def _findall_hits(pattern: re.Pattern, text: str) -> List[str]:
+    return [m.group(0) for m in pattern.finditer(text)]
+
+
+# ---------------- CDI: Cognitive Demand Index ----------------
 def compute_cdi(prompt_text: str) -> Dict:
-    """
-    SỬA LẠI: Dùng logic đếm đơn giản, không trọng số.
-    'cdi_composite' giờ là tổng của 2 tỷ lệ chính.
-    """
-    tokens = _lower_words(prompt_text)
-    rates = _compute_normalized_rates(prompt_text)
+    text = prompt_text or ""
+    text_lower = text.lower()
+    tokens = _words(text_lower)
+    n_tokens = max(1, len(tokens))
 
-    simple_composite = rates["cognitive_rate"] + rates["abstract_rate"]
+    c_terms_count, c_hits = _count_terms_and_hits(text_lower, COGNITIVE_VERBS)
+    a_terms_count, a_hits = _count_terms_and_hits(text_lower, ABSTRACT_TERMS)
+
+    c_rate = c_terms_count / n_tokens
+    a_rate = a_terms_count / n_tokens
+    ld = _lexical_density(tokens)
+    cps = _clauses_per_sentence(text)
+
+    cdi_composite = math.sqrt(c_rate * a_rate) if c_rate > 0 and a_rate > 0 else 0.0
 
     return {
-        "rate_cognitive_verbs": rates["cognitive_rate"],  # Trả về cognitive_rate mới
-        "lexical_density": _lexical_density(tokens),       # Vẫn giữ lại vì hữu ích
-        "clauses_per_sentence": _clauses_per_sentence(prompt_text), # Vẫn giữ lại
-        "rate_abstract_terms": rates["abstract_rate"],     # Trả về abstract_rate mới
-        "cdi_composite": simple_composite                  # Điểm tổng hợp mới, đơn giản
+        "rate_cognitive_verbs": c_rate,
+        "lexical_density": ld,
+        "clauses_per_sentence": cps,
+        "rate_abstract_terms": a_rate,
+        "cdi_composite": cdi_composite,
+        "hits": {
+            "cognitive_terms": c_hits,
+            "abstract_terms": a_hits,
+        },
     }
 
+
+# ---------------- SSS: Structured Scaffolding Score ----------------
 def compute_sss(prompt_text: str) -> Dict:
-    """
-    SỬA LẠI: Dùng logic đếm đơn giản.
-    'sss_weighted' bị loại bỏ, thay bằng 'scaffolding_rate' rõ ràng.
-    """
-    rates = _compute_normalized_rates(prompt_text)
+    text = prompt_text or ""
 
-    n_examples = len(re.findall(r"\bexample\b|\be\.g\.\b|\bfor example\b", prompt_text, re.IGNORECASE))
-    n_steps = len(re.findall(r"(?m)^\s*(?:\d+[\.\)]\s+|\-\s+|\*\s+|step\s*\d+)", prompt_text, re.IGNORECASE)) \
-            + len(re.findall(r"\b(first|second|third|fourth|fifth)\b", prompt_text, re.IGNORECASE))
-    n_formula = len(re.findall(r"[=^±%×÷+\-*/≤≥]", prompt_text)) + len(re.findall(r"\bpi\b|π", prompt_text, re.IGNORECASE))
-    n_hints = len(re.findall(r"\bhint\b|\bremember\b|\bnote\b|\bdefinition\b|\brecall\b", prompt_text, re.IGNORECASE))
+    ex_hits = _findall_hits(EXAMPLE_RE, text)
+    section_hits = _findall_hits(SECTION_HEADER_RE, text)
+    step_hits = (
+        _findall_hits(STEP_LINE_RE, text)
+        + _findall_hits(STEP_INLINE_RE, text)
+        + _findall_hits(STEP_PHRASE_RE, text)
+        + section_hits
+    )
+    formula_hits = _findall_hits(FORMULA_MARK_RE, text)
+    hint_hits = _findall_hits(HINT_RE, text)
 
+    E, S, F, H = len(ex_hits), len(step_hits), len(formula_hits), len(hint_hits)
+    
+    sss_raw = E + S + F + H
+    sss_log_weighted = math.log1p(E) + math.log1p(S) + math.log1p(F) + math.log1p(H)
 
     return {
-        "n_examples": n_examples,
-        "n_step_markers": n_steps,
-        "n_formula_markers": n_formula,
-        "n_hints": n_hints,
-        "scaffolding_rate": rates["scaffolding_rate"] 
+        "n_examples": E,
+        "n_step_markers": S,
+        "n_formula_markers": F,
+        "n_hints": H,
+        "sss_weighted": sss_log_weighted,
+        "sss_raw": sss_raw,
+        "hits": {
+            "examples": ex_hits,
+            "step_markers": step_hits,
+            "formula_markers": formula_hits,
+            "hints": hint_hits,
+        },
     }
 
+
+# ---------------- ARQ: Abstract Reasoning Quotient ----------------
 def compute_arq(prompt_text: str) -> Dict:
-    """
-    SỬA LẠI: Dùng logic đếm đơn giản.
-    'arq_score' giờ là cognitive_rate.
-    """
-    tokens = _lower_words(prompt_text)
-    rates = _compute_normalized_rates(prompt_text)
+    text = prompt_text or ""
+    text_lower = text.lower()
 
-    meta_present = any(v in tokens for v in METACOGNITIVE_VERBS)
+    a_terms_count, a_hits = _count_terms_and_hits(text_lower, ABSTRACT_TERMS)
+    numbers = _findall_hits(NUM_RE, text)
+    formula_hits = _findall_hits(FORMULA_MARK_RE, text)
 
-    # Hoàn toàn loại bỏ công thức ratio + bonus cũ
+    denom = len(numbers) + len(formula_hits) + 1
+    ratio = a_terms_count / denom
+
+    meta_terms_count, meta_hits = _count_terms_and_hits(text_lower, METACOGNITIVE_VERBS)
+    logic_conn_count, logic_conn_hits = _count_terms_and_hits(text_lower, LOGIC_CONNECTORS)
+    modal_count, modal_hits = _count_terms_and_hits(text_lower, MODALS)
+
+    meta_gate_open = (meta_terms_count >= 1) or ((logic_conn_count + modal_count) >= 2)
+    arq_score = ratio if meta_gate_open else 0.0
+    meta_bonus = 1.0 if meta_gate_open else 0.0
+
     return {
-        # Vẫn trả về các key cũ để tương thích
-        "abstract_terms": int(rates["abstract_rate"] * rates["total_words"]),
-        "numbers": len(_numbers(prompt_text)),
-        # Các key mới, rõ ràng hơn
-        "meta_present": meta_present,
-        "arq_score_simple": rates["cognitive_rate"] # Đây là chỉ số chính mới
+        "abstract_terms": a_terms_count,
+        "numbers": len(numbers),
+        "ratio": ratio,
+        "meta_bonus": meta_bonus,
+        "arq_score": arq_score,
+        "hits": {
+            "abstract_terms": a_hits,
+            "numbers": numbers,
+            "formula_markers": formula_hits,
+            "metacognitive": meta_hits,
+            "logic_connectors": logic_conn_hits,
+            "modals": modal_hits,
+            "meta_gate": meta_gate_open,
+        },
     }
 
+
+# ---------------- Orchestrator ----------------
 def compute_advanced_metrics(prompt_text: str) -> Dict:
-    """
-    Hàm này không cần thay đổi gì cả, vì các hàm con nó gọi
-    vẫn giữ nguyên tên và cấu trúc trả về.
-    """
-    return {
-        "cdi": compute_cdi(prompt_text),
-        "sss": compute_sss(prompt_text),
-        "arq": compute_arq(prompt_text),
+    cdi = compute_cdi(prompt_text)
+    sss = compute_sss(prompt_text)
+    arq = compute_arq(prompt_text)
+
+    # Consolidate all pattern hits into one dictionary for easy access
+    hits = {
+        "c_terms": cdi["hits"]["cognitive_terms"],
+        "a_terms": cdi["hits"]["abstract_terms"],
+        "examples": sss["hits"]["examples"],
+        "step_markers": sss["hits"]["step_markers"],
+        "formula_marks": sss["hits"]["formula_markers"],
+        "hints": sss["hits"]["hints"],
+        "numbers": arq["hits"]["numbers"],
+        "meta_terms": arq["hits"]["metacognitive"],
+        "logic_connectors": arq["hits"]["logic_connectors"],
+        "modals": arq["hits"]["modals"],
     }
+    
+    # Return the structured results
+    return {"cdi": cdi, "sss": sss, "arq": arq, "hits": hits}
