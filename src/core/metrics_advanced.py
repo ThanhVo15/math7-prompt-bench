@@ -5,9 +5,7 @@ import re
 import math
 from typing import Dict, List, Tuple, Optional, Set
 
-
-# ---------------- Lexicons (V2 – expanded and cleaned) ----------------
-# DEBUG: Đã loại bỏ các từ khóa bị trùng lặp từ các bộ lexicon.
+# ---------------- Lexicons (V2.1 – Expanded and Cleaned) ----------------
 COGNITIVE_VERBS: Set[str] = {
     # Analyze / Understand / Apply
     "analyze", "analyze why", "analyze how", "break down", "diagnose",
@@ -73,7 +71,6 @@ ABSTRACT_TERMS: Set[str] = {
 }
 
 METACOGNITIVE_VERBS: Set[str] = {
-    # Meta-level actions (self-monitoring, evaluation of process)
     "justify", "explain", "compare", "evaluate", "critique", "argue", "reflect", "assess",
     "self-check", "check your work", "verify reasoning", "validate reasoning",
     "explain reasoning", "explain decision", "explain choice", "explain steps",
@@ -117,19 +114,17 @@ STOPWORDS: Set[str] = {
     "you're", "you've", "your", "yours", "yourself", "yourselves",
 }
 
+# --- Regex Patterns ---
 WORD_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ']+")
 NUM_RE  = re.compile(r"\b\d+(?:\.\d+)?\b")
 SENT_SPLIT_RE = re.compile(r"[.!?…]+")
-
 CLAUSE_BOUNDARY_RE = re.compile(
     r"(,|;|:|\bthat\b|\bwhich\b|\bbecause\b|\bif\b|\bwhen\b|\bwhile\b|\bwhereas\b|\balthough\b|\bsince\b)",
     re.IGNORECASE
 )
-
 FORMULA_BASE = r"[=^±%×÷+*/≤≥]"
 HYPHEN_BETWEEN = r"(?:(?<=\w)-(?=\w)|(?<=\d)-(?=\d))"
 FORMULA_MARK_RE = re.compile(fr"(?:{FORMULA_BASE}|{HYPHEN_BETWEEN}|\bpi\b|π)", re.IGNORECASE)
-
 EXAMPLE_RE = re.compile(r"\bexample\b|\be\.g\.\b|\bfor example\b", re.IGNORECASE)
 HINT_RE = re.compile(r"\bhint\b|\bremember\b|\bnote\b|\bdefinition\b|\brecall\b", re.IGNORECASE)
 STEP_LINE_RE = re.compile(r"(?m)^\s*(?:\d+[\.\)]\s+|\-\s+|\*\s+|step\s*\d+)", re.IGNORECASE)
@@ -146,15 +141,13 @@ def _numbers(text: str) -> List[str]:
     return NUM_RE.findall(text)
 
 def _lexical_density(tokens: List[str]) -> float:
-    if not tokens:
-        return 0.0
+    if not tokens: return 0.0
     content_words = [t for t in tokens if t not in STOPWORDS]
     return len(content_words) / len(tokens) if tokens else 0.0
 
 def _clauses_per_sentence(text: str) -> float:
     sents = [s.strip() for s in SENT_SPLIT_RE.split(text) if s.strip()]
-    if not sents:
-        return 0.0
+    if not sents: return 0.0
     clause_counts = [1 + len(CLAUSE_BOUNDARY_RE.findall(s)) for s in sents]
     return sum(clause_counts) / len(sents)
 
@@ -162,7 +155,6 @@ def _count_terms_and_hits(text_lower: str, terms: Set[str]) -> Tuple[int, List[s
     cnt = 0
     hits: List[str] = []
     for term in terms:
-        # term is already lowercased from the set
         if " " in term:
             k = text_lower.count(term)
             if k > 0:
@@ -179,20 +171,33 @@ def _findall_hits(pattern: re.Pattern, text: str) -> List[str]:
     return [m.group(0) for m in pattern.finditer(text)]
 
 
-# ---------------- CDI: Cognitive Demand Index ----------------
-def compute_cdi(prompt_text: str) -> Dict:
+# ---------------- CDI: Cognitive Demand Index (Hybrid) ----------------
+def compute_cdi(prompt_text: str, ai_pattern_hits: Optional[Dict] = None) -> Dict:
     text = prompt_text or ""
     text_lower = text.lower()
-    tokens = _words(text_lower)
+    
+    # --- Làm giàu văn bản với các từ khóa từ AI ---
+    enriched_text = text_lower
+    if ai_pattern_hits:
+        ai_cognitive = ai_pattern_hits.get("cognitive_terms_ai", [])
+        ai_abstract = ai_pattern_hits.get("abstract_terms_ai", [])
+        # Nối các từ AI tìm thấy vào văn bản để đếm
+        enriched_text += " " + " ".join(ai_cognitive) + " " + " ".join(ai_abstract)
+
+    # Tính toán trên văn bản đã được làm giàu
+    tokens = _words(enriched_text)
     n_tokens = max(1, len(tokens))
 
-    c_terms_count, c_hits = _count_terms_and_hits(text_lower, COGNITIVE_VERBS)
-    a_terms_count, a_hits = _count_terms_and_hits(text_lower, ABSTRACT_TERMS)
+    c_terms_count, c_hits = _count_terms_and_hits(enriched_text, COGNITIVE_VERBS)
+    a_terms_count, a_hits = _count_terms_and_hits(enriched_text, ABSTRACT_TERMS)
 
+    # Các chỉ số khác vẫn tính trên văn bản gốc để giữ tính khách quan
+    original_tokens = _words(text_lower)
+    ld = _lexical_density(original_tokens)
+    cps = _clauses_per_sentence(text)
+    
     c_rate = c_terms_count / n_tokens
     a_rate = a_terms_count / n_tokens
-    ld = _lexical_density(tokens)
-    cps = _clauses_per_sentence(text)
 
     cdi_composite = math.sqrt(c_rate * a_rate) if c_rate > 0 and a_rate > 0 else 0.0
 
@@ -202,19 +207,15 @@ def compute_cdi(prompt_text: str) -> Dict:
         "clauses_per_sentence": cps,
         "rate_abstract_terms": a_rate,
         "cdi_composite": cdi_composite,
-        "hits": {
-            "cognitive_terms": c_hits,
-            "abstract_terms": a_hits,
-        },
+        "hits": {"cognitive_terms": c_hits, "abstract_terms": a_hits},
     }
 
 
-# ---------------- SSS: Structured Scaffolding Score ----------------
+# ---------------- SSS: Structured Scaffolding Score (Rule-based) ----------------
 def compute_sss(prompt_text: str) -> Dict:
     text = prompt_text or ""
-
-    ex_hits = _findall_hits(EXAMPLE_RE, text)
     section_hits = _findall_hits(SECTION_HEADER_RE, text)
+    ex_hits = _findall_hits(EXAMPLE_RE, text)
     step_hits = (
         _findall_hits(STEP_LINE_RE, text)
         + _findall_hits(STEP_INLINE_RE, text)
@@ -225,71 +226,69 @@ def compute_sss(prompt_text: str) -> Dict:
     hint_hits = _findall_hits(HINT_RE, text)
 
     E, S, F, H = len(ex_hits), len(step_hits), len(formula_hits), len(hint_hits)
-    
     sss_raw = E + S + F + H
     sss_log_weighted = math.log1p(E) + math.log1p(S) + math.log1p(F) + math.log1p(H)
 
     return {
-        "n_examples": E,
-        "n_step_markers": S,
-        "n_formula_markers": F,
-        "n_hints": H,
-        "sss_weighted": sss_log_weighted,
-        "sss_raw": sss_raw,
-        "hits": {
-            "examples": ex_hits,
-            "step_markers": step_hits,
-            "formula_markers": formula_hits,
-            "hints": hint_hits,
-        },
+        "n_examples": E, "n_step_markers": S, "n_formula_markers": F, "n_hints": H,
+        "sss_weighted": sss_log_weighted, "sss_raw": sss_raw,
+        "hits": {"examples": ex_hits, "step_markers": step_hits, "formula_markers": formula_hits, "hints": hint_hits},
     }
 
 
-# ---------------- ARQ: Abstract Reasoning Quotient ----------------
-def compute_arq(prompt_text: str) -> Dict:
+# ---------------- ARQ: Abstract Reasoning Quotient (Hybrid) ----------------
+def compute_arq(prompt_text: str, ai_pattern_hits: Optional[Dict] = None) -> Dict:
     text = prompt_text or ""
     text_lower = text.lower()
 
-    a_terms_count, a_hits = _count_terms_and_hits(text_lower, ABSTRACT_TERMS)
+    # --- Làm giàu văn bản với các từ khóa từ AI ---
+    enriched_text = text_lower
+    if ai_pattern_hits:
+        ai_abstract = ai_pattern_hits.get("abstract_terms_ai", [])
+        ai_meta = ai_pattern_hits.get("meta_terms_ai", [])
+        # Gộp cả cognitive vào vì AI có thể phân loại nhầm "reasoning" vào đây
+        ai_cognitive = ai_pattern_hits.get("cognitive_terms_ai", [])
+        enriched_text += " " + " ".join(ai_abstract) + " " + " ".join(ai_meta) + " ".join(ai_cognitive)
+
+    # Đếm lại thuật ngữ trên văn bản đã làm giàu
+    a_terms_count, a_hits = _count_terms_and_hits(enriched_text, ABSTRACT_TERMS)
+    meta_terms_count, meta_hits = _count_terms_and_hits(enriched_text, METACOGNITIVE_VERBS)
+
+    # Các yếu tố khác vẫn đếm trên văn bản gốc
     numbers = _findall_hits(NUM_RE, text)
     formula_hits = _findall_hits(FORMULA_MARK_RE, text)
-
-    denom = len(numbers) + len(formula_hits) + 1
-    ratio = a_terms_count / denom
-
-    meta_terms_count, meta_hits = _count_terms_and_hits(text_lower, METACOGNITIVE_VERBS)
     logic_conn_count, logic_conn_hits = _count_terms_and_hits(text_lower, LOGIC_CONNECTORS)
     modal_count, modal_hits = _count_terms_and_hits(text_lower, MODALS)
 
+    # Tính toán cuối cùng
+    denom = len(numbers) + len(formula_hits) + 1
+    ratio = a_terms_count / denom
     meta_gate_open = (meta_terms_count >= 1) or ((logic_conn_count + modal_count) >= 2)
     arq_score = ratio if meta_gate_open else 0.0
     meta_bonus = 1.0 if meta_gate_open else 0.0
 
     return {
-        "abstract_terms": a_terms_count,
-        "numbers": len(numbers),
-        "ratio": ratio,
-        "meta_bonus": meta_bonus,
-        "arq_score": arq_score,
+        "abstract_terms": a_terms_count, "numbers": len(numbers), "ratio": ratio,
+        "meta_bonus": meta_bonus, "arq_score": arq_score,
         "hits": {
-            "abstract_terms": a_hits,
-            "numbers": numbers,
-            "formula_markers": formula_hits,
-            "metacognitive": meta_hits,
-            "logic_connectors": logic_conn_hits,
-            "modals": modal_hits,
-            "meta_gate": meta_gate_open,
+            "abstract_terms": a_hits, "numbers": numbers, "formula_markers": formula_hits,
+            "metacognitive": meta_hits, "logic_connectors": logic_conn_hits,
+            "modals": modal_hits, "meta_gate": meta_gate_open,
         },
     }
 
 
-# ---------------- Orchestrator ----------------
-def compute_advanced_metrics(prompt_text: str) -> Dict:
-    cdi = compute_cdi(prompt_text)
+# ---------------- Orchestrator (Hybrid) ----------------
+def compute_advanced_metrics(prompt_text: str, ai_pattern_hits: Optional[Dict] = None) -> Dict:
+    """
+    Hàm điều phối chính, tính toán tất cả các chỉ số nâng cao.
+    Nó sẽ truyền các pattern do AI phát hiện vào các hàm tính CDI và ARQ.
+    """
+    cdi = compute_cdi(prompt_text, ai_pattern_hits=ai_pattern_hits)
+    # SSS vẫn dựa trên rule-based vì regex đã rất mạnh cho việc nhận diện cấu trúc.
     sss = compute_sss(prompt_text)
-    arq = compute_arq(prompt_text)
+    arq = compute_arq(prompt_text, ai_pattern_hits=ai_pattern_hits)
 
-    # Consolidate all pattern hits into one dictionary for easy access
     hits = {
         "c_terms": cdi["hits"]["cognitive_terms"],
         "a_terms": cdi["hits"]["abstract_terms"],
@@ -303,5 +302,4 @@ def compute_advanced_metrics(prompt_text: str) -> Dict:
         "modals": arq["hits"]["modals"],
     }
     
-    # Return the structured results
     return {"cdi": cdi, "sss": sss, "arq": arq, "hits": hits}
