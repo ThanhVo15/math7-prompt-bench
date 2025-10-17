@@ -350,8 +350,8 @@ You must rewrite the following prompt TEMPLATE.
 1.  **ADAPT, DON'T JUST REPLACE**: Do not just robotically fill in the template. Creatively rewrite it to sound natural for the given PERSONA and appropriate for the COGNITIVE LEVEL. A student persona should sound like they are asking a question. An educator persona should sound like they are giving an instruction.
 2.  **PRESERVE THE CORE TASK**: The final prompt must still accomplish the main goal of the TEMPLATE (e.g., 'compare 3 strategies', 'review a solution').
 3.  **INTELLIGENT PLACEHOLDER FILLING**:
-    * If `{student_answer}` is present, you MUST invent a plausible (but likely incorrect) student answer based on the PROBLEM. For example, a common conceptual error.
-    * If `{hypothesis}` is present, you MUST invent a simple, relevant hypothesis for the PROBLEM.
+    * If `{{student_answer}}` is present, you MUST invent a plausible (but likely incorrect) student answer based on the PROBLEM. For example, a common conceptual error.
+    * If `{{hypothesis}}` is present, you MUST invent a simple, relevant hypothesis for the PROBLEM.
     * NEVER leave placeholders like '[Student answer here]' in the output.
 4.  **INSERT PROBLEM TEXT**: Replace `{{problem_text}}` with the exact PROBLEM text.
 5.  **OUTPUT**: Return ONLY the final, rewritten prompt. No commentary, no explanations, no markdown.
